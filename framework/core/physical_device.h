@@ -191,10 +191,19 @@ template <vkb::BindingType bindingType>
 inline PhysicalDevice<bindingType>::PhysicalDevice(vkb::core::Instance<bindingType> &instance, PhysicalDeviceType physical_device) :
     instance{instance}, handle{physical_device}
 {
+	// 设备特性，比如是否支持cube texture arrays，是否支持geometry shader等
 	features                = physical_device.getFeatures();
+
+	// 设备属性，比如设备名称，设备ID，驱动版本等
 	properties              = physical_device.getProperties();
+
+	// 设备内存属性，比如不同类型的内存堆和内存类型
 	memory_properties       = physical_device.getMemoryProperties();
+
+	// 设备队列族属性，比如每个队列族支持的操作类型，队列数量等
 	queue_family_properties = physical_device.getQueueFamilyProperties();
+
+	// 设备支持的扩展列表
 	device_extensions       = physical_device.enumerateDeviceExtensionProperties();
 
 	LOGI("Found GPU: {}", properties.deviceName.data());
@@ -228,6 +237,7 @@ template <vkb::BindingType bindingType>
 template <typename FeatureType>
 inline FeatureType &PhysicalDevice<bindingType>::add_extension_features_impl()
 {
+	// 不开启VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME拓展，就无法请求设备特性
 	// We cannot request extension features if the physical device properties 2 instance extension isn't enabled
 	if (!instance.is_enabled(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
 	{
@@ -255,6 +265,7 @@ inline std::pair<std::vector<typename PhysicalDevice<bindingType>::PerformanceCo
                  std::vector<typename PhysicalDevice<bindingType>::PerformanceCounterDescriptionKHRType>>
     PhysicalDevice<bindingType>::enumerate_queue_family_performance_query_counters(uint32_t queue_family_index) const
 {
+	// 获取性能计数器
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return handle.enumerateQueueFamilyPerformanceQueryCountersKHR(queue_family_index);
@@ -270,6 +281,7 @@ inline std::pair<std::vector<typename PhysicalDevice<bindingType>::PerformanceCo
 template <vkb::BindingType bindingType>
 inline DriverVersion PhysicalDevice<bindingType>::get_driver_version() const
 {
+	// 获取驱动版本
 	DriverVersion version;
 
 	switch (properties.vendorID)
@@ -298,6 +310,7 @@ inline DriverVersion PhysicalDevice<bindingType>::get_driver_version() const
 template <vkb::BindingType bindingType>
 inline void *PhysicalDevice<bindingType>::get_extension_feature_chain() const
 {
+	// 获取拓展特性链的起始指针
 	return last_requested_extension_feature;
 }
 
@@ -327,6 +340,7 @@ inline FeatureType PhysicalDevice<bindingType>::get_extension_features_impl()
 	}
 
 	// Get the extension feature
+	// 获取扩展特性
 	return handle.getFeatures2KHR<vk::PhysicalDeviceFeatures2KHR, FeatureType>().template get<FeatureType>();
 }
 
@@ -339,6 +353,7 @@ inline typename PhysicalDevice<bindingType>::PhysicalDeviceFeaturesType const &P
 template <vkb::BindingType bindingType>
 inline typename PhysicalDevice<bindingType>::FormatPropertiesType PhysicalDevice<bindingType>::get_format_properties(FormatType format) const
 {
+	// 获取某个格式的属性，也就是在当前设备中，这种格式的图片或者缓存能否被支持，以及支持的方式（linear或者tiling）
 	if constexpr (bindingType == BindingType::Cpp)
 	{
 		return handle.getFormatProperties(format);
@@ -390,6 +405,9 @@ inline uint32_t PhysicalDevice<bindingType>::get_memory_type(uint32_t bits, Memo
 template <vkb::BindingType bindingType>
 inline uint32_t PhysicalDevice<bindingType>::get_memory_type_impl(uint32_t bits, vk::MemoryPropertyFlags properties, vk::Bool32 *memory_type_found) const
 {
+	// 查找合适的内存类型
+	// bits可以从vk::MemoryRequirements.memoryTypeBits获得，表示可以使用的内存类型掩码
+	// properties表示所需的内存属性，比如是否需要host visible等
 	for (uint32_t i = 0; i < memory_properties.memoryTypeCount; i++)
 	{
 		if ((bits & 1) == 1)
@@ -433,6 +451,7 @@ template <vkb::BindingType bindingType>
 uint32_t
     PhysicalDevice<bindingType>::get_queue_family_performance_query_passes(QueryPoolPerformanceCreateInfoKHRType const *perf_query_create_info) const
 {
+	// 获取性能查询所需的通道数量
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return handle.getQueueFamilyPerformanceQueryPassesKHR(perf_query_create_info);
@@ -446,6 +465,7 @@ uint32_t
 template <vkb::BindingType bindingType>
 inline std::vector<typename PhysicalDevice<bindingType>::QueueFamilyPropertiesType> const &PhysicalDevice<bindingType>::get_queue_family_properties() const
 {
+	// 获取设备的队列族属性
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return queue_family_properties;
@@ -465,12 +485,14 @@ inline typename PhysicalDevice<bindingType>::PhysicalDeviceFeaturesType const &P
 template <vkb::BindingType bindingType>
 inline bool PhysicalDevice<bindingType>::has_high_priority_graphics_queue() const
 {
+	// 是否设置图形队列为高优先级
 	return high_priority_graphics_queue;
 }
 
 template <vkb::BindingType bindingType>
 inline bool PhysicalDevice<bindingType>::is_extension_supported(const std::string &requested_extension) const
 {
+	// 检查设备是否支持某个扩展
 	return std::ranges::find_if(device_extensions,
 	                            [requested_extension](auto &device_extension) { return std::strcmp(device_extension.extensionName, requested_extension.c_str()) == 0; }) != device_extensions.end();
 }
@@ -479,6 +501,7 @@ template <vkb::BindingType bindingType>
 inline typename PhysicalDevice<bindingType>::Bool32Type PhysicalDevice<bindingType>::is_present_supported(SurfaceKHRType surface,
                                                                                                           uint32_t       queue_family_index) const
 {
+	// 检查某个队列族是否支持在指定的surface上进行present操作
 	return surface ? handle.getSurfaceSupportKHR(queue_family_index, surface) : false;
 }
 
