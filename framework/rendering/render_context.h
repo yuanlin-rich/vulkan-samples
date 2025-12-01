@@ -63,6 +63,7 @@ using RenderFrameCpp = RenderFrame<BindingType::Cpp>;
 template <vkb::BindingType bindingType>
 class RenderContext
 {
+	// 渲染上下文
   public:
 	// The format to use for the RenderTargets if a swapchain isn't created
 	static inline vk::Format DEFAULT_VK_FORMAT = vk::Format::eR8G8B8A8Srgb;
@@ -273,7 +274,10 @@ class RenderContext
 	void          update_swapchain_impl(vk::Extent2D const &extent, vk::SurfaceTransformFlagBitsKHR transform);
 
   private:
+	// acquire image的signal semaphore
 	vk::Semaphore                                                acquired_semaphore;
+
+	// 当前活动的帧索引
 	uint32_t                                                     active_frame_index        = 0;        // Current active frame index
 	HPPRenderTarget::CreateFunc                                  create_render_target_func = HPPRenderTarget::DEFAULT_CREATE_FUNC;
 	vkb::core::DeviceCpp                                        &device;
@@ -303,6 +307,7 @@ inline RenderContextCpp::RenderContext(vkb::core::DeviceCpp                    &
                                        std::vector<vk::SurfaceFormatKHR> const &surface_format_priority_list) :
     device(device),
     window(window),
+	// 图像队列。这个图像队列是否支持present？
     queue(device.get_queue_by_flags(vk::QueueFlagBits::eGraphics, 0)),
     surface_extent{window.get_extent().width, window.get_extent().height}
 {
@@ -352,6 +357,7 @@ inline void RenderContext<bindingType>::initialize_swapchain(vk::SurfaceKHR     
 template <vkb::BindingType bindingType>
 inline std::shared_ptr<vkb::core::CommandBuffer<bindingType>> RenderContext<bindingType>::begin(vkb::CommandBufferResetMode reset_mode)
 {
+	// 渲染循环开始
 	assert(prepared && "HPPRenderContext not prepared for rendering, call prepare()");
 
 	if (!frame_active)
@@ -359,12 +365,15 @@ inline std::shared_ptr<vkb::core::CommandBuffer<bindingType>> RenderContext<bind
 		begin_frame();
 	}
 
+	// acquire image的signal semaphore为空，渲染发生不可恢复的异常，抛出错误
 	if (!acquired_semaphore)
 	{
 		throw std::runtime_error("Couldn't begin frame");
 	}
 
 	const auto &queue = device.get_queue_by_flags(vk::QueueFlagBits::eGraphics, 0);
+
+	// 获取当前活动帧的命令缓冲区，申请命令缓冲区
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return get_active_frame().get_command_pool(queue, reset_mode).request_command_buffer();
@@ -378,20 +387,26 @@ inline std::shared_ptr<vkb::core::CommandBuffer<bindingType>> RenderContext<bind
 template <vkb::BindingType bindingType>
 inline void RenderContext<bindingType>::begin_frame()
 {
+	// 渲染循环开始
 	// Only handle surface changes if a swapchain exists
 	if (swapchain)
 	{
+		// 如果存在交换链，则在渲染开始前先处理可能的surface变化
 		handle_surface_changes();
 	}
 
+	// frame还是处于active状态，说明上一轮渲染没有调用end_frame结束渲染，抛出错误
 	assert(!frame_active && "Frame is still active, please call end_frame");
 
+	// 上一帧
 	auto &prev_frame = *frames[active_frame_index];
 
 	// We will use the acquired semaphore in a different frame context,
 	// so we need to hold ownership.
+	// 从上一帧获取acquire image的signal semaphore，并且将其所有权转移到当前渲染上下文
 	acquired_semaphore = prev_frame.get_semaphore_pool().request_semaphore_with_ownership();
 
+	// 从渲染链获取当前活动帧的索引
 	if (swapchain)
 	{
 		vk::Result result;
@@ -401,11 +416,15 @@ inline void RenderContext<bindingType>::begin_frame()
 		}
 		catch (vk::OutOfDateKHRError & /*err*/)
 		{
+			// 交换链已经过时，这种情况下有可能vulkan会抛出异常，所以要捕获
 			result = vk::Result::eErrorOutOfDateKHR;
 		}
 
 		if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR)
 		{
+			// 交换链已经次优或者过时，处理surface变化
+			// 在MacOS平台上，无论是亚优化还是过时，都强制更新交换链。这是因为在MacOS上，亚优化可能不仅仅是因为大小改变，还可能因为其他交换链属性变化。
+			// 在其他平台上，只有过时才强制更新，亚优化可以继续使用但可能会有效能损失
 #if defined(PLATFORM__MACOS)
 			// On Apple platforms, force swapchain update on both eSuboptimalKHR and eErrorOutOfDateKHR
 			// eSuboptimalKHR may occur on macOS/iOS following changes to swapchain other than extent/size
@@ -425,21 +444,25 @@ inline void RenderContext<bindingType>::begin_frame()
 
 		if (result != vk::Result::eSuccess)
 		{
+			// 处理交换链失败，释放信号量，重置上一帧
 			prev_frame.reset();
 			return;
 		}
 	}
 
 	// Now the frame is active again
+	// 获取活动帧成功，设置渲染上下文为活动状态
 	frame_active = true;
 
 	// Wait on all resource to be freed from the previous render to this frame
+	// 等待当前活动帧的所有资源从上一轮渲染中释放
 	wait_frame();
 }
 
 template <vkb::BindingType bindingType>
 inline typename RenderContext<bindingType>::SemaphoreType RenderContext<bindingType>::consume_acquired_semaphore()
 {
+	// 销毁acquire image的signal semaphore
 	assert(frame_active && "Frame is not active, please call begin_frame");
 	return std::exchange(acquired_semaphore, nullptr);
 }
@@ -447,11 +470,15 @@ inline typename RenderContext<bindingType>::SemaphoreType RenderContext<bindingT
 template <vkb::BindingType bindingType>
 inline void RenderContext<bindingType>::end_frame(SemaphoreType semaphore)
 {
+	// 渲染循环结束，传入的semaphore渲染完成后signal，在这里会用于present的wait semaphore
+	// 如果frame不是active状态，说明没有调用begin_frame开始渲染，抛出错误
 	assert(frame_active && "Frame is not active, please call begin_frame");
 
 	if (swapchain)
 	{
 		vk::SwapchainKHR   vk_swapchain = swapchain->get_handle();
+
+		// 提交present请求
 		vk::PresentInfoKHR present_info{.waitSemaphoreCount = 1, .swapchainCount = 1, .pSwapchains = &vk_swapchain, .pImageIndices = &active_frame_index};
 		if constexpr (bindingType == BindingType::Cpp)
 		{
@@ -461,6 +488,11 @@ inline void RenderContext<bindingType>::end_frame(SemaphoreType semaphore)
 		{
 			present_info.pWaitSemaphores = reinterpret_cast<vk::Semaphore *>(&semaphore);
 		}
+
+		// 检查物理设备是否支持 VK_KHR_display_swapchain 扩展。这个扩展允许：
+		// 创建直接显示到物理显示器的交换链（可以用于全屏幕显示）
+		// 绕过窗口系统（如X11、Wayland、Win32）
+		// 直接控制显示时序和模式
 
 		vk::DisplayPresentInfoKHR disp_present_info;
 		if (device.get_gpu().is_extension_supported(VK_KHR_DISPLAY_SWAPCHAIN_EXTENSION_NAME) &&
