@@ -34,28 +34,29 @@ using DeviceC = Device<vkb::BindingType::C>;
 }        // namespace core
 
 /// Types of shader resources
+// shader资源类型
 enum class ShaderResourceType
 {
-	Input,
-	InputAttachment,
-	Output,
-	Image,
-	ImageSampler,
-	ImageStorage,
-	Sampler,
-	BufferUniform,
-	BufferStorage,
-	PushConstant,
-	SpecializationConstant,
+	Input,                    // 输入资源，通常指的是顶点着色器的输入。例如，顶点属性（位置、法线、纹理坐标等）。在顶点着色器中，每个顶点都会输入这些数据。
+	InputAttachment,          // 输入附件，主要用于子通道（subpass）中，允许片段着色器读取当前渲染通道（render pass）中先前子通道的帧缓冲附件数据。这在延迟渲染等场景中非常有用。
+	Output,                   // 输出资源，通常指的是着色器阶段的输出。例如，顶点着色器输出处理后的顶点数据，片段着色器输出颜色和深度值到帧缓冲。
+	Image,                    // 图像资源，指的是纹理图像，可以在着色器中被采样。通常用于存储颜色、法线、高光等贴图。
+	ImageSampler,             // 图像采样器，是图像和采样器的组合。在着色器中，我们通常需要采样纹理，所以图像和采样器一起使用。在某些API（如Vulkan）中，图像和采样器可以是分离的，但也可以组合成一个资源。
+	ImageStorage,             // 图像存储，用于图像加载/存储操作（Image Load/Store）。这是一种无序访问操作，允许着色器对图像进行随机读写，通常用于计算着色器中。
+	Sampler,                  // 采样器，定义了如何对纹理进行采样，包括过滤方式（如线性、最近邻）和寻址模式（如重复、钳制等）。采样器可以与图像分开绑定。
+	BufferUniform,            // 统一缓冲区（Uniform Buffer），用于存储着色器中的统一变量。这些变量在绘制调用中保持不变，通常用于传递模型视图投影矩阵等数据。
+	BufferStorage,            // 存储缓冲区（Storage Buffer），类似于统一缓冲区，但支持更大的数据量，并且可以随机读写。通常用于计算着色器中存储大量数据。
+	PushConstant,             // 推送常量（Push Constant），是一种高效的传递少量数据到着色器的方式。推送常量不需要缓冲区，而是直接通过命令缓冲区传递，速度很快。
+	SpecializationConstant,   // specialization常量（Specialization Constant），是在管线创建时指定的常量，允许在管线创建时改变着色器中的常量值，而不需要重新编译着色器。这可以用于配置着色器行为（如定义循环次数、条件编译等）。
 	All
 };
 
 /// This determines the type and method of how descriptor set should be created and bound
 enum class ShaderResourceMode
 {
-	Static,
-	Dynamic,
-	UpdateAfterBind
+	Static,					  // 静态资源，一旦绑定不可以修改
+	Dynamic,                  // 动态资源，意味着可以在命令缓冲区记录期间通过vkCmdBindDescriptorSets时提供动态偏移来更新部分内容（例如，动态统一缓冲区或动态存储缓冲区）。
+	UpdateAfterBind           // 描述符在绑定到命令缓冲区之后，仍然可以被更新（直到绘制/调度命令实际执行之前）。
 };
 
 /// A bitmask of qualifiers applied to a resource
