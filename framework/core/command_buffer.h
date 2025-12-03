@@ -1314,32 +1314,38 @@ inline void CommandBuffer<bindingType>::flush_impl(vkb::core::DeviceCpp &device,
 	// 刷新pipeline state
 	flush_pipeline_state_impl(device, pipeline_bind_point);
 
-	// 刷新push constants
+	// 推送push constants
 	flush_push_constants();
 
-	// 刷新绑定的描述符集状态
+	// 更新描述符集合，并且绑定描述符集合
 	flush_descriptor_state_impl(pipeline_bind_point);
 }
 
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::PipelineBindPoint pipeline_bind_point)
 {
+	// command pool必须和render frame绑定
 	assert(command_pool.get_render_frame() && "The command pool must be associated to a render frame");
 
+	// 获取流水线布局
 	const auto &pipeline_layout = pipeline_state.get_pipeline_layout();
 
+	// 需要更新的描述符集合
 	std::unordered_set<uint32_t> update_descriptor_sets;
 
 	// Iterate over the shader sets to check if they have already been bound
 	// If they have, add the set so that the command buffer later updates it
+	// 遍历shader中的描述符集合
 	for (auto &set_it : pipeline_layout.get_shader_sets())
 	{
+		// 描述符集合的id
 		uint32_t descriptor_set_id = set_it.first;
 
+		// 根据描述符集合的id，获取对应的描述集合布局
 		auto descriptor_set_layout_it = descriptor_set_layout_binding_state.find(descriptor_set_id);
-
 		if (descriptor_set_layout_it != descriptor_set_layout_binding_state.end())
 		{
+			// 如果描述符集合布局已经发生了变化，则认为需要更新
 			if (descriptor_set_layout_it->second->get_handle() != pipeline_layout.get_descriptor_set_layout(descriptor_set_id).get_handle())
 			{
 				update_descriptor_sets.emplace(descriptor_set_id);
