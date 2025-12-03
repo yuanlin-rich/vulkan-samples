@@ -266,6 +266,8 @@ class CommandBuffer
 	vkb::core::CommandPoolCpp                                              &command_pool;
 	vkb::core::HPPFramebuffer const                                        *current_framebuffer = nullptr;
 	vkb::core::HPPRenderPass const                                         *current_render_pass = nullptr;
+
+	// 已经绑定的描述符集合布局的情况
 	std::unordered_map<uint32_t, vkb::core::HPPDescriptorSetLayout const *> descriptor_set_layout_binding_state;
 	vk::Extent2D                                                            last_framebuffer_extent = {};
 	vk::Extent2D                                                            last_render_area_extent = {};
@@ -1345,7 +1347,8 @@ inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::Pipeline
 		auto descriptor_set_layout_it = descriptor_set_layout_binding_state.find(descriptor_set_id);
 		if (descriptor_set_layout_it != descriptor_set_layout_binding_state.end())
 		{
-			// 如果描述符集合布局已经发生了变化，则认为需要更新
+			// 对应的set index已经有descriptor set layout，但是descriptor set layout已经发生了变化
+			// 则认为对应的描述符集合需要更新
 			if (descriptor_set_layout_it->second->get_handle() != pipeline_layout.get_descriptor_set_layout(descriptor_set_id).get_handle())
 			{
 				update_descriptor_sets.emplace(descriptor_set_id);
@@ -1356,6 +1359,7 @@ inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::Pipeline
 	// Validate that the bound descriptor set layouts exist in the pipeline layout
 	for (auto set_it = descriptor_set_layout_binding_state.begin(); set_it != descriptor_set_layout_binding_state.end();)
 	{
+		// 当前流水线布局并不包含描述符布局，则将描述符布局去掉
 		if (!pipeline_layout.has_descriptor_set_layout(set_it->first))
 		{
 			set_it = descriptor_set_layout_binding_state.erase(set_it);
@@ -1367,6 +1371,7 @@ inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::Pipeline
 	}
 
 	// Check if a descriptor set needs to be created
+	// 检查是否需要创建描述符集合，resource_binding_state已经发生改变，或者有需要更新的descriptor set
 	if (resource_binding_state.is_dirty() || !update_descriptor_sets.empty())
 	{
 		resource_binding_state.clear_dirty();
@@ -1378,6 +1383,7 @@ inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::Pipeline
 			auto    &resource_set      = resource_set_it.second;
 
 			// Don't update resource set if it's not in the update list OR its state hasn't changed
+			// resource set没有改变，并且当前描述符集不需要更新
 			if (!resource_set.is_dirty() && (update_descriptor_sets.find(descriptor_set_id) == update_descriptor_sets.end()))
 			{
 				continue;
@@ -1395,6 +1401,7 @@ inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::Pipeline
 			auto &descriptor_set_layout = pipeline_layout.get_descriptor_set_layout(descriptor_set_id);
 
 			// Make descriptor set layout bound for current set
+			// 更新绑定的描述符集合布局
 			descriptor_set_layout_binding_state[descriptor_set_id] = &descriptor_set_layout;
 
 			BindingMap<vk::DescriptorBufferInfo> buffer_infos;
@@ -1403,6 +1410,7 @@ inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::Pipeline
 			std::vector<uint32_t> dynamic_offsets;
 
 			// Iterate over all resource bindings
+			// 获取buffer infos和image infos
 			for (auto &binding_it : resource_set.get_resource_bindings())
 			{
 				auto  binding_index     = binding_it.first;
@@ -1470,6 +1478,7 @@ inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::Pipeline
 				}
 			}
 
+			// 创建并且绑定描述符集信息
 			vk::DescriptorSet descriptor_set_handle = command_pool.get_render_frame()->request_descriptor_set(
 			    descriptor_set_layout, buffer_infos, image_infos, update_after_bind, command_pool.get_thread_index());
 
