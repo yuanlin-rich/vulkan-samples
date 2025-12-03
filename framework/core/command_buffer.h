@@ -567,6 +567,7 @@ inline void CommandBuffer<bindingType>::bind_lighting(vkb::rendering::LightingSt
 	set_specialization_constant(2, to_u32(lighting_state.spot_lights.size()));
 }
 
+// 设置pipeline布局
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_pipeline_layout(PipelineLayoutType &pipeline_layout)
 {
@@ -580,6 +581,7 @@ inline void CommandBuffer<bindingType>::bind_pipeline_layout(PipelineLayoutType 
 	}
 }
 
+// 绑定vertex buffer
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_vertex_buffers(uint32_t                                                                         first_binding,
                                                             std::vector<std::reference_wrapper<const vkb::core::Buffer<bindingType>>> const &buffers,
@@ -597,6 +599,7 @@ inline void CommandBuffer<bindingType>::bind_vertex_buffers(uint32_t            
 	}
 }
 
+// 绑定vertex buffer
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_vertex_buffers_impl(uint32_t                                                               first_binding,
                                                                  std::vector<std::reference_wrapper<const vkb::core::BufferCpp>> const &buffers,
@@ -1224,6 +1227,7 @@ inline void CommandBuffer<bindingType>::set_update_after_bind(bool update_after_
 	update_after_bind = update_after_bind_;
 }
 
+// 设置vertex输入
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_vertex_input_state(VertexInputStateType const &state_info)
 {
@@ -1292,6 +1296,8 @@ inline void CommandBuffer<bindingType>::write_timestamp(PipelineStagFlagBitsType
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::flush(vk::PipelineBindPoint pipeline_bind_point)
 {
+	// 刷新渲染相关的状态
+	// pipeline_bind_point指定渲染管线还是图形管线
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		flush_impl(this->get_device(), pipeline_bind_point);
@@ -1305,8 +1311,13 @@ inline void CommandBuffer<bindingType>::flush(vk::PipelineBindPoint pipeline_bin
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::flush_impl(vkb::core::DeviceCpp &device, vk::PipelineBindPoint pipeline_bind_point)
 {
+	// 刷新pipeline state
 	flush_pipeline_state_impl(device, pipeline_bind_point);
+
+	// 刷新push constants
 	flush_push_constants();
+
+	// 刷新绑定的描述符集状态
 	flush_descriptor_state_impl(pipeline_bind_point);
 }
 
@@ -1466,16 +1477,19 @@ template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::flush_pipeline_state_impl(vkb::core::DeviceCpp &device, vk::PipelineBindPoint pipeline_bind_point)
 {
 	// Create a new pipeline only if the graphics state changed
+	// 只有图形管线状态改变的时候，才创建新的图形管线
 	if (!pipeline_state.is_dirty())
 	{
 		return;
 	}
 
+	// 清除管线的状态，防止重复创建
 	pipeline_state.clear_dirty();
 
 	// Create and bind pipeline
 	if (pipeline_bind_point == vk::PipelineBindPoint::eGraphics)
 	{
+		// 创建并且绑定图形管线
 		pipeline_state.set_render_pass(*current_render_pass);
 		auto &pipeline = device.get_resource_cache().request_graphics_pipeline(pipeline_state);
 
@@ -1483,6 +1497,7 @@ inline void CommandBuffer<bindingType>::flush_pipeline_state_impl(vkb::core::Dev
 	}
 	else if (pipeline_bind_point == vk::PipelineBindPoint::eCompute)
 	{
+		// 创建并且绑定计算管线
 		auto &pipeline = device.get_resource_cache().request_compute_pipeline(pipeline_state);
 
 		this->get_resource().bindPipeline(pipeline_bind_point, pipeline.get_handle());
