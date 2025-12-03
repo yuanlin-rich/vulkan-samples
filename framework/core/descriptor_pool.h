@@ -38,9 +38,11 @@ using DeviceC = Device<vkb::BindingType::C>;
  */
 class DescriptorPool
 {
+	// 描述符池，内部实际上管理了多个VkDescriptorPool
   public:
 	static const uint32_t MAX_SETS_PER_POOL = 16;
 
+	// 这里的设计是DescriptorPool只能分配指定descriptor_set_layout的descriptor set
 	DescriptorPool(vkb::core::DeviceC        &device,
 	               const DescriptorSetLayout &descriptor_set_layout,
 	               uint32_t                   pool_size = MAX_SETS_PER_POOL);
@@ -61,8 +63,10 @@ class DescriptorPool
 
 	void set_descriptor_set_layout(const DescriptorSetLayout &set_layout);
 
+	// 分配descriptor set
 	VkDescriptorSet allocate();
 
+	// 释放descriptor set
 	VkResult free(VkDescriptorSet descriptor_set);
 
   private:
@@ -71,24 +75,30 @@ class DescriptorPool
 	const DescriptorSetLayout *descriptor_set_layout{nullptr};
 
 	// Descriptor pool size
+	// 每个池分配的descritpr pool size
 	std::vector<VkDescriptorPoolSize> pool_sizes;
 
 	// Number of sets to allocate for each pool
+	// 每个池的最大分配descriptor set数量
 	uint32_t pool_max_sets{0};
 
 	// Total descriptor pools created
 	std::vector<VkDescriptorPool> pools;
 
 	// Count sets for each pool
+	// 每个池已经分配的descriptor set数量
 	std::vector<uint32_t> pool_sets_count;
 
 	// Current pool index to allocate descriptor set
+	// 当前正在使用的descriptor pool
 	uint32_t pool_index{0};
 
 	// Map between descriptor set and pool index
+	// 找到descriptor set是从那个pool分配的
 	std::unordered_map<VkDescriptorSet, uint32_t> set_pool_mapping;
 
 	// Find next pool index or create new pool
+	// 寻找或者创建pool
 	uint32_t find_available_pool(uint32_t pool_index);
 };
 }        // namespace vkb
