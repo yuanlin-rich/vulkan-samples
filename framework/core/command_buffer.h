@@ -300,8 +300,8 @@ template <vkb::BindingType bindingType>
 inline vkb::core::CommandBuffer<bindingType>::CommandBuffer(vkb::core::CommandPool<bindingType> &command_pool_, CommandBufferLevelType level_) :
     vkb::core::VulkanResource<bindingType, CommandBufferType>(nullptr, &command_pool_.get_device()), level(static_cast<vk::CommandBufferLevel>(level_)), command_pool(reinterpret_cast<vkb::core::CommandPoolCpp &>(command_pool_)), max_push_constants_size(command_pool_.get_device().get_gpu().get_properties().limits.maxPushConstantsSize)
 {
+	// 从command pool申请command buffer
 	vk::CommandBufferAllocateInfo allocate_info{.commandPool = command_pool.get_handle(), .level = level, .commandBufferCount = 1};
-
 	this->set_handle(this->get_device().get_resource().allocateCommandBuffers(allocate_info).front());
 }
 
@@ -309,6 +309,7 @@ template <vkb::BindingType bindingType>
 inline CommandBuffer<bindingType>::~CommandBuffer()
 {
 	// Destroy command buffer
+	// 释放command buffer
 	if (this->has_handle())
 	{
 		this->get_device().get_resource().freeCommandBuffers(command_pool.get_handle(), this->get_resource());
@@ -319,6 +320,13 @@ template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::begin(CommandBufferUsageFlagsType            flags,
                                               vkb::core::CommandBuffer<bindingType> *primary_cmd_buf)
 {
+	// 开始录制
+	// command buffer usage：
+	// 1）只提交一次，提交之后再次使用需要重置
+	// 2）作为secondary command buffer，在render pass内部使用，继承主命令缓冲区的渲染通道状态
+	// 3）命令缓冲区可以同时被多个提交使用
+
+	// 如是是secondary command buffer，开始录制的时候需要提供primary_cmd_buf
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		begin_impl(flags, primary_cmd_buf);
@@ -334,8 +342,8 @@ inline void CommandBuffer<bindingType>::begin_impl(vk::CommandBufferUsageFlags f
 {
 	if (level == vk::CommandBufferLevel::eSecondary)
 	{
+		// secondary command buffer开始录制的时候必须提供primary command buffer
 		assert(primary_cmd_buf && "A primary command buffer pointer must be provided when calling begin from a secondary one");
-
 		return begin_impl(flags, primary_cmd_buf->current_render_pass, primary_cmd_buf->current_framebuffer, primary_cmd_buf->pipeline_state.get_subpass_index());
 	}
 	else
@@ -370,9 +378,16 @@ inline void CommandBuffer<bindingType>::begin_impl(vk::CommandBufferUsageFlags  
                                                    uint32_t                         subpass_index)
 {
 	// Reset state
+	// 重置渲染管线状态
 	pipeline_state.reset();
+
+	// 重置资源绑定状态
 	resource_binding_state.reset();
+
+	// 清空描述符集合布局信息
 	descriptor_set_layout_binding_state.clear();
+
+	// 清空push constants
 	stored_push_constants.clear();
 
 	vk::CommandBufferBeginInfo       begin_info{.flags = flags};
@@ -380,14 +395,16 @@ inline void CommandBuffer<bindingType>::begin_impl(vk::CommandBufferUsageFlags  
 
 	if (level == vk::CommandBufferLevel::eSecondary)
 	{
+		// 使用secondary command buffer的时候，必须提供render pass和frame buffer
 		assert((render_pass && framebuffer) && "Render pass and framebuffer must be provided when calling begin from a secondary one");
 
 		current_render_pass = render_pass;
 		current_framebuffer = framebuffer;
 
+		// second command buffer
 		inheritance.renderPass  = current_render_pass->get_handle();
 		inheritance.framebuffer = current_framebuffer->get_handle();
-		inheritance.subpass     = subpass_index;
+		inherit`ance.subpass     = subpass_index;
 
 		begin_info.pInheritanceInfo = &inheritance;
 	}
@@ -398,6 +415,7 @@ inline void CommandBuffer<bindingType>::begin_impl(vk::CommandBufferUsageFlags  
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::begin_query(QueryPoolType const &query_pool, uint32_t query, QueryControlFlagsType flags)
 {
+	// 开始查询
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().beginQuery(query_pool.get_resource(), query, flags);
@@ -416,13 +434,18 @@ inline void CommandBuffer<bindingType>::begin_render_pass(RenderTargetType const
                                                           SubpassContentsType                                                       contents)
 {
 	// Reset state
+	// 开始一个新的render pass，重置流水线状态，资源绑定状态和描述符集合状态
 	pipeline_state.reset();
 	resource_binding_state.reset();
 	descriptor_set_layout_binding_state.clear();
 
+	// 根据渲染目标，load和store信息，子通道信息获取徐然安通道
 	auto &render_pass = get_render_pass(render_target, load_store_infos, subpasses);
+
+	// 根据渲染目标和渲染通道获取frame buffer
 	auto &framebuffer = this->get_device().get_resource_cache().request_framebuffer(render_target, render_pass);
 
+	// 开始渲染通道
 	begin_render_pass(render_target, render_pass, framebuffer, clear_values, contents);
 }
 
@@ -454,7 +477,10 @@ inline void CommandBuffer<bindingType>::begin_render_pass_impl(vkb::rendering::H
                                                                std::vector<vk::ClearValue> const     &clear_values,
                                                                vk::SubpassContents                    contents)
 {
+	// 记录当前的render pass
 	current_render_pass = &render_pass;
+
+	// 记录当前的frame buffer
 	current_framebuffer = &framebuffer;
 
 	// Begin render pass
@@ -467,6 +493,7 @@ inline void CommandBuffer<bindingType>::begin_render_pass_impl(vkb::rendering::H
 	const auto &framebuffer_extent = current_framebuffer->get_extent();
 
 	// Test the requested render area to confirm that it is optimal and could not cause a performance reduction
+	// 如果frame buffer不满足优化条件，打印警告
 	if (!is_render_size_optimal(framebuffer_extent, begin_info.renderArea))
 	{
 		// Only prints the warning if the framebuffer or render area are different since the last time the render size was not optimal
@@ -482,6 +509,7 @@ inline void CommandBuffer<bindingType>::begin_render_pass_impl(vkb::rendering::H
 	this->get_resource().beginRenderPass(begin_info, contents);
 
 	// Update blend state attachments for first subpass
+	// 根据render pass掉attachments信息，更新blend state的数量
 	auto blend_state = pipeline_state.get_color_blend_state();
 	blend_state.attachments.resize(current_render_pass->get_color_output_count(pipeline_state.get_subpass_index()));
 	pipeline_state.set_color_blend_state(blend_state);
@@ -491,6 +519,8 @@ template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_buffer(
     vkb::core::Buffer<bindingType> const &buffer, DeviceSizeType offset, DeviceSizeType range, uint32_t set, uint32_t binding, uint32_t array_element)
 {
+	// 绑定缓存区，更新绑定资源信息
+	// 绑定需要提供：缓冲区，偏移量，范围，描述符集索引，绑定点，数组元素
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		resource_binding_state.bind_buffer(buffer, offset, range, set, binding, array_element);
@@ -506,6 +536,8 @@ template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_image(
     ImageViewType const &image_view, SamplerType const &sampler, uint32_t set, uint32_t binding, uint32_t array_element)
 {
+	// 绑定图像，更新绑定资源信息
+	// 绑定需要提供：图像视图，采样器，描述符集索引，绑定点，数组元素
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		resource_binding_state.bind_image(image_view, sampler, set, binding, array_element);
@@ -523,6 +555,8 @@ inline void CommandBuffer<bindingType>::bind_image(
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_image(ImageViewType const &image_view, uint32_t set, uint32_t binding, uint32_t array_element)
 {
+	// 绑定图像，更新绑定资源信息
+	// 绑定需要提供：图像视图，描述符集索引，绑定点，数组元素
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		resource_binding_state.bind_image(image_view, set, binding, array_element);
@@ -536,6 +570,8 @@ inline void CommandBuffer<bindingType>::bind_image(ImageViewType const &image_vi
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_index_buffer(vkb::core::Buffer<bindingType> const &buffer, DeviceSizeType offset, IndexTypeType index_type)
 {
+	// 绑定索引缓存
+	// 绑定索引缓存需要提供：索引缓存，索引缓存大小，索引类型
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().bindIndexBuffer(buffer.get_resource(), offset, index_type);
@@ -549,6 +585,8 @@ inline void CommandBuffer<bindingType>::bind_index_buffer(vkb::core::Buffer<bind
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_input(ImageViewType const &image_view, uint32_t set, uint32_t binding, uint32_t array_element)
 {
+	// 绑定input attachment
+	// 绑定input attachment需要提供：图像视图，描述符集索引，绑定点，绑定数组大小
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		resource_binding_state.bind_input(image_view, set, binding, array_element);
@@ -562,6 +600,7 @@ inline void CommandBuffer<bindingType>::bind_input(ImageViewType const &image_vi
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_lighting(vkb::rendering::LightingState<bindingType> &lighting_state, uint32_t set, uint32_t binding)
 {
+	// 绑定灯光，先不看
 	bind_buffer(lighting_state.light_buffer.get_buffer(), lighting_state.light_buffer.get_offset(), lighting_state.light_buffer.get_size(), set, binding, 0);
 
 	set_specialization_constant(0, to_u32(lighting_state.directional_lights.size()));
@@ -573,6 +612,7 @@ inline void CommandBuffer<bindingType>::bind_lighting(vkb::rendering::LightingSt
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::bind_pipeline_layout(PipelineLayoutType &pipeline_layout)
 {
+	// 绑定流水线布局
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		pipeline_state.set_pipeline_layout(pipeline_layout);
@@ -589,6 +629,8 @@ inline void CommandBuffer<bindingType>::bind_vertex_buffers(uint32_t            
                                                             std::vector<std::reference_wrapper<const vkb::core::Buffer<bindingType>>> const &buffers,
                                                             std::vector<DeviceSizeType> const                                               &offsets)
 {
+	// 绑定vertex buffer
+	// 绑定vertex buffer需要提供：首个绑定点，vertex buffer数组，vertex buffer大小的数组
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		bind_vertex_buffers_impl(first_binding, buffers, offsets);
@@ -615,6 +657,7 @@ inline void CommandBuffer<bindingType>::bind_vertex_buffers_impl(uint32_t       
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::blit_image(ImageType const &src_img, ImageType const &dst_img, std::vector<ImageBlitType> const &regions)
 {
+	// 拷贝图像
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().blitImage(src_img.get_handle(),
@@ -641,6 +684,7 @@ inline void CommandBuffer<bindingType>::buffer_memory_barrier(vkb::core::Buffer<
                                                               DeviceSizeType                        size,
                                                               BufferMemoryBarrierType const        &memory_barrier)
 {
+	// 缓冲区的memory barrier
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		buffer_memory_barrier_impl(buffer, offset, size, memory_barrier);
@@ -660,6 +704,7 @@ inline void CommandBuffer<bindingType>::buffer_memory_barrier_impl(vkb::core::Bu
                                                                    vk::DeviceSize                             size,
                                                                    vkb::common::HPPBufferMemoryBarrier const &memory_barrier)
 {
+	// 缓冲区的memory barrier
 	vk::BufferMemoryBarrier buffer_memory_barrier{.srcAccessMask = memory_barrier.src_access_mask,
 	                                              .dstAccessMask = memory_barrier.dst_access_mask,
 	                                              .buffer        = buffer.get_handle(),
@@ -672,6 +717,7 @@ inline void CommandBuffer<bindingType>::buffer_memory_barrier_impl(vkb::core::Bu
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::clear(ClearAttachmentType const &attachment, ClearRectType const &rect)
 {
+	// 清空指定的attachment
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().clearAttachments(attachment, rect);
@@ -687,6 +733,7 @@ inline void CommandBuffer<bindingType>::copy_buffer(vkb::core::Buffer<bindingTyp
                                                     vkb::core::Buffer<bindingType> const &dst_buffer,
                                                     DeviceSizeType                        size)
 {
+	// 复制缓冲区
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		copy_buffer_impl(src_buffer, dst_buffer, size);
@@ -703,6 +750,7 @@ template <vkb::BindingType bindingType>
 inline void
     CommandBuffer<bindingType>::copy_buffer_impl(vkb::core::BufferCpp const &src_buffer, vkb::core::BufferCpp const &dst_buffer, vk::DeviceSize size)
 {
+	// 复制缓冲区
 	vk::BufferCopy copy_region{.size = size};
 	this->get_resource().copyBuffer(src_buffer.get_handle(), dst_buffer.get_handle(), copy_region);
 }
@@ -712,6 +760,7 @@ inline void CommandBuffer<bindingType>::copy_buffer_to_image(vkb::core::Buffer<b
                                                              ImageType const                        &image,
                                                              std::vector<BufferImageCopyType> const &regions)
 {
+	// 把缓冲区的图像复制给图像
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().copyBufferToImage(buffer.get_handle(), image.get_handle(), vk::ImageLayout::eTransferDstOptimal, regions);
@@ -728,6 +777,7 @@ inline void CommandBuffer<bindingType>::copy_buffer_to_image(vkb::core::Buffer<b
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::copy_image(ImageType const &src_img, ImageType const &dst_img, std::vector<ImageCopyType> const &regions)
 {
+	// 复制图像
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().copyImage(src_img.get_handle(), vk::ImageLayout::eTransferSrcOptimal, dst_img.get_handle(), vk::ImageLayout::eTransferDstOptimal, regions);
@@ -748,6 +798,7 @@ inline void CommandBuffer<bindingType>::copy_image_to_buffer(ImageType const    
                                                              vkb::core::Buffer<bindingType> const   &buffer,
                                                              std::vector<BufferImageCopyType> const &regions)
 {
+	// 复制图像到缓冲区
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().copyImageToBuffer(image.get_handle(), image_layout, buffer.get_handle(), regions);
@@ -764,6 +815,7 @@ inline void CommandBuffer<bindingType>::copy_image_to_buffer(ImageType const    
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::dispatch(uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z)
 {
+	// 发送计算命令
 	flush(vk::PipelineBindPoint::eCompute);
 	this->get_resource().dispatch(group_count_x, group_count_y, group_count_z);
 }
@@ -771,6 +823,7 @@ inline void CommandBuffer<bindingType>::dispatch(uint32_t group_count_x, uint32_
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::dispatch_indirect(vkb::core::Buffer<bindingType> const &buffer, DeviceSizeType offset)
 {
+	// 发送计算命令，计算命令在buffer中
 	flush(vk::PipelineBindPoint::eCompute);
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
@@ -785,6 +838,7 @@ inline void CommandBuffer<bindingType>::dispatch_indirect(vkb::core::Buffer<bind
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::draw(uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance)
 {
+	// 绘制命令
 	flush(vk::PipelineBindPoint::eGraphics);
 	this->get_resource().draw(vertex_count, instance_count, first_vertex, first_instance);
 }
@@ -793,6 +847,7 @@ template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::draw_indexed(
     uint32_t index_count, uint32_t instance_count, uint32_t first_index, int32_t vertex_offset, uint32_t first_instance)
 {
+	// 索引绘制命令
 	flush(vk::PipelineBindPoint::eGraphics);
 	this->get_resource().drawIndexed(index_count, instance_count, first_index, vertex_offset, first_instance);
 }
@@ -800,6 +855,7 @@ inline void CommandBuffer<bindingType>::draw_indexed(
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::draw_indexed_indirect(vkb::core::Buffer<bindingType> const &buffer, DeviceSizeType offset, uint32_t draw_count, uint32_t stride)
 {
+	// 索引绘制命令，索引在buffer中
 	flush(vk::PipelineBindPoint::eGraphics);
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
@@ -814,12 +870,14 @@ inline void CommandBuffer<bindingType>::draw_indexed_indirect(vkb::core::Buffer<
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::end()
 {
+	// 结束command buffer的录制
 	this->get_resource().end();
 }
 
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::end_query(QueryPoolType const &query_pool, uint32_t query)
 {
+	// 结束查询
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().endQuery(query_pool.get_handle(), query);
@@ -833,12 +891,14 @@ inline void CommandBuffer<bindingType>::end_query(QueryPoolType const &query_poo
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::end_render_pass()
 {
+	// 结束渲染通道
 	this->get_resource().endRenderPass();
 }
 
 template <vkb::BindingType bindingType>
 inline typename CommandBuffer<bindingType>::CommandBufferLevelType CommandBuffer<bindingType>::get_level() const
 {
+	// command buffer是first还是secondary
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return level;
@@ -852,12 +912,14 @@ inline typename CommandBuffer<bindingType>::CommandBufferLevelType CommandBuffer
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::execute_commands(vkb::core::CommandBuffer<bindingType> &secondary_command_buffer)
 {
+	// 执行secondary command buffer
 	this->get_resource().executeCommands(secondary_command_buffer.get_resource());
 }
 
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::execute_commands(std::vector<std::shared_ptr<vkb::core::CommandBuffer<bindingType>>> &secondary_command_buffers)
 {
+	// 执行secondary command buffer
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		execute_commands_impl(secondary_command_buffers);
@@ -871,6 +933,7 @@ inline void CommandBuffer<bindingType>::execute_commands(std::vector<std::shared
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::execute_commands_impl(std::vector<std::shared_ptr<vkb::core::CommandBuffer<vkb::BindingType::Cpp>>> &secondary_command_buffers)
 {
+	// 执行secondary command buffer
 	std::vector<vk::CommandBuffer> sec_cmd_buf_handles(secondary_command_buffers.size(), nullptr);
 	std::transform(secondary_command_buffers.begin(),
 	               secondary_command_buffers.end(),
@@ -885,6 +948,7 @@ inline typename vkb::core::CommandBuffer<bindingType>::RenderPassType &
                                                 std::vector<LoadStoreInfoType> const                                     &load_store_infos,
                                                 std::vector<std::unique_ptr<vkb::rendering::Subpass<bindingType>>> const &subpasses)
 {
+	// 获取渲染通道
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return get_render_pass_impl(this->get_device(), render_target, load_store_infos, subpasses);
@@ -907,6 +971,7 @@ inline vkb::core::HPPRenderPass &
                                                      std::vector<std::unique_ptr<vkb::rendering::SubpassCpp>> const &subpasses)
 {
 	// Create render pass
+	// 获取渲染通道，根据render target和subpass
 	assert(subpasses.size() > 0 && "Cannot create a render pass without any subpass");
 
 	std::vector<vkb::core::HPPSubpassInfo> subpass_infos(subpasses.size());
@@ -930,6 +995,7 @@ inline vkb::core::HPPRenderPass &
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::image_memory_barrier(RenderTargetType &render_target, uint32_t view_index, ImageMemoryBarrierType const &memory_barrier) const
 {
+	// 图像内存屏障
 	auto const &image_view = render_target.get_views()[view_index];
 
 	if constexpr (bindingType == vkb::BindingType::Cpp)
@@ -948,6 +1014,7 @@ inline void CommandBuffer<bindingType>::image_memory_barrier(RenderTargetType &r
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::image_memory_barrier(ImageViewType const &image_view, ImageMemoryBarrierType const &memory_barrier) const
 {
+	// 图像内存屏障
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		image_memory_barrier_impl(image_view, memory_barrier);
@@ -963,6 +1030,7 @@ template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::image_memory_barrier_impl(vkb::core::HPPImageView const            &image_view,
                                                                   vkb::common::HPPImageMemoryBarrier const &memory_barrier) const
 {
+	// 图像内存屏障
 	// Adjust barrier's subresource range for depth images
 	auto subresource_range = image_view.get_subresource_range();
 	auto format            = image_view.get_format();
@@ -994,19 +1062,24 @@ inline void CommandBuffer<bindingType>::image_memory_barrier_impl(vkb::core::HPP
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::next_subpass()
 {
+	// 下一个子渲染通道
 	// Increment subpass index
+	// 更新子渲染通道索引
 	pipeline_state.set_subpass_index(pipeline_state.get_subpass_index() + 1);
 
 	// Update blend state attachments
+	// 根据子通道的attachements更新pipeline state中的blend state
 	auto blend_state = pipeline_state.get_color_blend_state();
 	blend_state.attachments.resize(current_render_pass->get_color_output_count(pipeline_state.get_subpass_index()));
 	pipeline_state.set_color_blend_state(blend_state);
 
 	// Reset descriptor sets
+	// 重置描述符集合
 	resource_binding_state.reset();
 	descriptor_set_layout_binding_state.clear();
 
 	// Clear stored push constants
+	// 清空push constants
 	stored_push_constants.clear();
 
 	this->get_resource().nextSubpass(vk::SubpassContents::eInline);
@@ -1015,6 +1088,7 @@ inline void CommandBuffer<bindingType>::next_subpass()
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::push_constants(const std::vector<uint8_t> &values)
 {
+	// push constants
 	uint32_t push_constant_size = to_u32(stored_push_constants.size() + values.size());
 
 	if (push_constant_size > max_push_constants_size)
@@ -1032,6 +1106,7 @@ template <vkb::BindingType bindingType>
 template <typename T>
 inline void CommandBuffer<bindingType>::push_constants(const T &value)
 {
+	// push constants
 	auto data = to_bytes(value);
 
 	uint32_t size = to_u32(stored_push_constants.size() + data.size());
@@ -1048,6 +1123,7 @@ inline void CommandBuffer<bindingType>::push_constants(const T &value)
 template <vkb::BindingType bindingType>
 inline typename CommandBuffer<bindingType>::ResultType CommandBuffer<bindingType>::reset(vkb::CommandBufferResetMode reset_mode)
 {
+	// 重置命令缓存
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return reset_impl(reset_mode);
@@ -1061,6 +1137,7 @@ inline typename CommandBuffer<bindingType>::ResultType CommandBuffer<bindingType
 template <vkb::BindingType bindingType>
 inline vk::Result CommandBuffer<bindingType>::reset_impl(vkb::CommandBufferResetMode reset_mode)
 {
+	// 重置命令缓存
 	assert(reset_mode == command_pool.get_reset_mode() && "Command buffer reset mode must match the one used by the pool to allocate it");
 	if (reset_mode == vkb::CommandBufferResetMode::ResetIndividually)
 	{
@@ -1073,6 +1150,7 @@ inline vk::Result CommandBuffer<bindingType>::reset_impl(vkb::CommandBufferReset
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::reset_query_pool(QueryPoolType const &query_pool, uint32_t first_query, uint32_t query_count)
 {
+	// 重置查询池
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().resetQueryPool(query_pool.get_handle(), first_query, query_count);
@@ -1086,6 +1164,7 @@ inline void CommandBuffer<bindingType>::reset_query_pool(QueryPoolType const &qu
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::resolve_image(ImageType const &src_img, ImageType const &dst_img, std::vector<ImageResolveType> const &regions)
 {
+	// resolve纹理，将纹理从多采样转为单点采样
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().resolveImage(
@@ -1104,12 +1183,14 @@ inline void CommandBuffer<bindingType>::resolve_image(ImageType const &src_img, 
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_blend_constants(std::array<float, 4> const &blend_constants)
 {
+	// 设置blend常数
 	this->get_resource().setBlendConstants(blend_constants.data());
 }
 
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_color_blend_state(ColorBlendStateType const &state_info)
 {
+	// 设置color blend state
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		pipeline_state.set_color_blend_state(state_info);
@@ -1123,18 +1204,21 @@ inline void CommandBuffer<bindingType>::set_color_blend_state(ColorBlendStateTyp
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_depth_bias(float depth_bias_constant_factor, float depth_bias_clamp, float depth_bias_slope_factor)
 {
+	// 设置深度偏移量
 	this->get_resource().setDepthBias(depth_bias_constant_factor, depth_bias_clamp, depth_bias_slope_factor);
 }
 
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_depth_bounds(float min_depth_bounds, float max_depth_bounds)
 {
+	// 设置深度范围
 	this->get_handle().setDepthBounds(min_depth_bounds, max_depth_bounds);
 }
 
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_depth_stencil_state(DepthStencilStateType const &state_info)
 {
+	// 设置深度模板缓存状态
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		pipeline_state.set_depth_stencil_state(state_info);
@@ -1148,6 +1232,7 @@ inline void CommandBuffer<bindingType>::set_depth_stencil_state(DepthStencilStat
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_input_assembly_state(InputAssemblyStateType const &state_info)
 {
+	// 设置输入装配
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		pipeline_state.set_input_assembly_state(state_info);
@@ -1161,12 +1246,14 @@ inline void CommandBuffer<bindingType>::set_input_assembly_state(InputAssemblySt
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_line_width(float line_width)
 {
+	// 设置线宽
 	this->get_resource().setLineWidth(line_width);
 }
 
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_multisample_state(MultisampleStateType const &state_info)
 {
+	// 设置多重采样状态
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		pipeline_state.set_multisample_state(state_info);
@@ -1180,6 +1267,7 @@ inline void CommandBuffer<bindingType>::set_multisample_state(MultisampleStateTy
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_rasterization_state(RasterizationStateType const &state_info)
 {
+	// 设置光栅化状态
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		pipeline_state.set_rasterization_state(state_info);
@@ -1193,6 +1281,7 @@ inline void CommandBuffer<bindingType>::set_rasterization_state(RasterizationSta
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_scissor(uint32_t first_scissor, std::vector<Rect2DType> const &scissors)
 {
+	// 设置裁剪
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().setScissor(first_scissor, scissors);
@@ -1207,6 +1296,7 @@ template <vkb::BindingType bindingType>
 template <class T>
 inline void CommandBuffer<bindingType>::set_specialization_constant(uint32_t constant_id, T const &data)
 {
+	// 设置specialization constant
 	if constexpr (std::is_same<T, bool>::value)
 	{
 		set_specialization_constant(constant_id, to_bytes(to_u32(data)));
@@ -1226,13 +1316,14 @@ inline void CommandBuffer<bindingType>::set_specialization_constant(uint32_t con
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_update_after_bind(bool update_after_bind_)
 {
+	// 设置绑定后更新
 	update_after_bind = update_after_bind_;
 }
 
-// 设置vertex输入
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_vertex_input_state(VertexInputStateType const &state_info)
 {
+	// 设置vertex输入
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		pipeline_state.set_vertex_input_state(state_info);
@@ -1246,6 +1337,7 @@ inline void CommandBuffer<bindingType>::set_vertex_input_state(VertexInputStateT
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_viewport(uint32_t first_viewport, std::vector<ViewportType> const &viewports)
 {
+	// 设置视口状态
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().setViewport(first_viewport, viewports);
@@ -1259,6 +1351,7 @@ inline void CommandBuffer<bindingType>::set_viewport(uint32_t first_viewport, st
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::set_viewport_state(ViewportStateType const &state_info)
 {
+	// 设置视口状态
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		pipeline_state.set_viewport_state(state_info);
@@ -1272,6 +1365,7 @@ inline void CommandBuffer<bindingType>::set_viewport_state(ViewportStateType con
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::update_buffer(vkb::core::Buffer<bindingType> const &buffer, DeviceSizeType offset, std::vector<uint8_t> const &data)
 {
+	// 更新buffer数据
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().template updateBuffer<uint8_t>(buffer.get_handle(), offset, data);
@@ -1285,6 +1379,7 @@ inline void CommandBuffer<bindingType>::update_buffer(vkb::core::Buffer<bindingT
 template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::write_timestamp(PipelineStagFlagBitsType pipeline_stage, QueryPoolType const &query_pool, uint32_t query)
 {
+	// 写入时间戳
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_resource().writeTimestamp(pipeline_stage, query_pool.get_handle(), query);
@@ -1327,6 +1422,9 @@ template <vkb::BindingType bindingType>
 inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::PipelineBindPoint pipeline_bind_point)
 {
 	// command pool必须和render frame绑定
+	// 大量的重复绑定机制
+	// 只有descriptor layout和绑定的资源同时变化才更新，我也不知道为什么要搞得这么复杂
+	// 可能是为了防止上层对同一个pipeline多次重复绑定
 	assert(command_pool.get_render_frame() && "The command pool must be associated to a render frame");
 
 	// 获取流水线布局
@@ -1338,6 +1436,7 @@ inline void CommandBuffer<bindingType>::flush_descriptor_state_impl(vk::Pipeline
 	// Iterate over the shader sets to check if they have already been bound
 	// If they have, add the set so that the command buffer later updates it
 	// 遍历shader中的描述符集合
+	// 但是什么时候descriptor_set_layout_binding_state发生变化？
 	for (auto &set_it : pipeline_layout.get_shader_sets())
 	{
 		// 描述符集合的id
