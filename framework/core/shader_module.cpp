@@ -40,6 +40,7 @@ ShaderModule::ShaderModule(vkb::core::DeviceC   &device,
 
 	SPIRVReflection spirv_reflection;
 	// Reflect all shader resources
+	// 通过spirv工具反射出shader的资源
 	if (!spirv_reflection.reflect_shader_resources(stage, spirv, resources, shader_variant))
 	{
 		throw VulkanException{VK_ERROR_INITIALIZATION_FAILED};

@@ -72,37 +72,38 @@ struct ShaderResourceQualifiers
 
 /// Store shader resource data.
 /// Used by the shader module.
+// shader资源
 struct ShaderResource
 {
-	VkShaderStageFlags stages;
+	VkShaderStageFlags stages; 					// 在哪些shader阶段可用
 
-	ShaderResourceType type;
+	ShaderResourceType type;   					// 资源类型
 
-	ShaderResourceMode mode;
+	ShaderResourceMode mode;   					// 静态，动态，绑定后更新
 
-	uint32_t set;
+	uint32_t set;              					// 描述符集合id
 
-	uint32_t binding;
+	uint32_t binding;          					// 绑定点
 
-	uint32_t location;
+	uint32_t location;							// 位置
 
-	uint32_t input_attachment_index;
+	uint32_t input_attachment_index;			// input attachment索引
 
-	uint32_t vec_size;
+	uint32_t vec_size;							// 如果是vector，指定分量个数
 
-	uint32_t columns;
+	uint32_t columns;							// 不知道用处
 
-	uint32_t array_size;
+	uint32_t array_size;						// 如果是数组，指定数组元素个数
 
-	uint32_t offset;
+	uint32_t offset;							// 不知道用途
 
-	uint32_t size;
+	uint32_t size;								// 不知道用途
 
-	uint32_t constant_id;
+	uint32_t constant_id;						// const id
 
-	uint32_t qualifiers;
+	uint32_t qualifiers;						// 不知道用途
 
-	std::string name;
+	std::string name;							// 资源名
 };
 
 /**
@@ -138,6 +139,7 @@ class ShaderVariant
 
 class ShaderSource
 {
+	// 代表shader源码
   public:
 	ShaderSource() = default;
 

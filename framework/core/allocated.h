@@ -123,6 +123,7 @@ void shutdown();
 template <vkb::BindingType bindingType, typename HandleType>
 class Allocated : public vkb::core::VulkanResource<bindingType, HandleType>
 {
+	// 所有需要分配内存的gpu资源的父类
   public:
 	using ParentType = vkb::core::VulkanResource<bindingType, HandleType>;
 
