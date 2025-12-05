@@ -27,6 +27,7 @@ namespace vkb
 {
 namespace
 {
+// 1.0版本和2.0版本，2.0版本带了pNext，可以附加一些其他信息
 inline void set_structure_type(VkAttachmentDescription &attachment)
 {
 	// VkAttachmentDescription has no sType field
@@ -108,6 +109,7 @@ inline VkResult create_vk_renderpass(VkDevice device, VkRenderPassCreateInfo2KHR
 }
 }        // namespace
 
+// 把自定义的attachments转为vulkan的VkAttachDescriptor或者VkAttachDescriptor2KHR
 template <typename T>
 std::vector<T> get_attachment_descriptions(const std::vector<Attachment> &attachments, const std::vector<LoadStoreInfo> &load_store_infos)
 {
@@ -138,6 +140,7 @@ std::vector<T> get_attachment_descriptions(const std::vector<Attachment> &attach
 	return attachment_descriptions;
 }
 
+// 根据subpass descriptor设置attachment descriptor的布局
 template <typename T_SubpassDescription, typename T_AttachmentDescription, typename T_AttachmentReference>
 void set_attachment_layouts(std::vector<T_SubpassDescription> &subpass_descriptions, std::vector<T_AttachmentDescription> &attachment_descriptions)
 {
@@ -274,6 +277,7 @@ bool is_depth_a_dependency(std::vector<T_SubpassDescription> &subpass_descriptio
 	return false;
 }
 
+// subpass之间的依赖关系
 template <typename T>
 std::vector<T> get_subpass_dependencies(const size_t subpass_count, bool depth_stencil_dependency)
 {
@@ -283,13 +287,26 @@ std::vector<T> get_subpass_dependencies(const size_t subpass_count, bool depth_s
 	{
 		for (uint32_t subpass_id = 0; subpass_id < to_u32(subpass_count - 1); ++subpass_id)
 		{
+			// 依赖分为颜色和深度模板两种
+			// 这里看起来就是让下一个依赖上一个？很奇怪，这样的前提是保证subpass本身就已经排序了
 			T color_dep{};
 			color_dep.srcSubpass      = subpass_id;
 			color_dep.dstSubpass      = subpass_id + 1;
+
+			// 输出attachment结束
 			color_dep.srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+			// 输出attachment结束或者fragment读取shader
 			color_dep.dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+
+			// 上一个阶段写入
 			color_dep.srcAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+			// 下一个阶段读取
 			color_dep.dstAccessMask   = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+			// 允许子通道在像素区域级别流水线执行，而不是等待整个渲染完成
+			// 在平铺架构的gpu上提升性能
 			color_dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 			dependencies.push_back(color_dep);
 
@@ -314,6 +331,7 @@ std::vector<T> get_subpass_dependencies(const size_t subpass_count, bool depth_s
 template <typename T>
 T get_attachment_reference(const uint32_t attachment, const VkImageLayout layout)
 {
+	// 设置attachment reference，也就是attachments的索引和layout
 	T reference{};
 	set_structure_type(reference);
 
@@ -323,17 +341,24 @@ T get_attachment_reference(const uint32_t attachment, const VkImageLayout layout
 	return reference;
 }
 
+// 创建render pass
+// 需要根据attachments，load store信息以及subpass信息
 template <typename T_SubpassDescription, typename T_AttachmentDescription, typename T_AttachmentReference, typename T_SubpassDependency, typename T_RenderPassCreateInfo>
 void RenderPass::create_renderpass(const std::vector<Attachment> &attachments, const std::vector<LoadStoreInfo> &load_store_infos, const std::vector<SubpassInfo> &subpasses)
 {
 	if (attachments.size() != load_store_infos.size())
 	{
+		// attachments数量和load store infos数量必须相同
+		// 每个attachment对应一个load store info
 		LOGW("Render Pass creation: size of attachment list and load/store info list does not match: {} vs {}", attachments.size(), load_store_infos.size());
 	}
 
+	// VkAttachmentDescription，就是创建render pass指定的attachment的数组，各个subpass通过reference引用VkAttachmentDescription
+	// 这里通过attachments和load_store_infos创建VkAttachmentDescription
 	auto attachment_descriptions = get_attachment_descriptions<T_AttachmentDescription>(attachments, load_store_infos);
 
 	// Store attachments for every subpass
+	// 每个subpass的attachment reference，attachment reference包含attachment descriptortion的索引，以及布局
 	std::vector<std::vector<T_AttachmentReference>> input_attachments{subpass_count};
 	std::vector<std::vector<T_AttachmentReference>> color_attachments{subpass_count};
 	std::vector<std::vector<T_AttachmentReference>> depth_stencil_attachments{subpass_count};
@@ -359,10 +384,13 @@ void RenderPass::create_renderpass(const std::vector<Attachment> &attachments, c
 		// Fill color attachments references
 		for (auto o_attachment : subpass.output_attachments)
 		{
+			// 如果attachment中布局未VK_IMAGE_LAYOUT_UNDEFINED，则使用VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+			// 否则使用attachment的布局
 			auto  initial_layout = attachments[o_attachment].initial_layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : attachments[o_attachment].initial_layout;
 			auto &description    = attachment_descriptions[o_attachment];
 			if (!is_depth_format(description.format))
 			{
+				// 对于非深度格式的图像，才能当color reference
 				color_attachments[i].push_back(get_attachment_reference<T_AttachmentReference>(o_attachment, initial_layout));
 			}
 		}
@@ -370,12 +398,15 @@ void RenderPass::create_renderpass(const std::vector<Attachment> &attachments, c
 		// Fill input attachments references
 		for (auto i_attachment : subpass.input_attachments)
 		{
+			// 深度格式的布局是VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+			// 其他的布局事VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
 			auto initial_layout = vkb::is_depth_format(attachments[i_attachment].format) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 			input_attachments[i].push_back(get_attachment_reference<T_AttachmentReference>(i_attachment, initial_layout));
 		}
 
 		for (auto r_attachment : subpass.color_resolve_attachments)
 		{
+			// 如果attachment中布局未VK_IMAGE_LAYOUT_UNDEFINED，则使用VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
 			auto initial_layout = attachments[r_attachment].initial_layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : attachments[r_attachment].initial_layout;
 			color_resolve_attachments[i].push_back(get_attachment_reference<T_AttachmentReference>(r_attachment, initial_layout));
 		}
@@ -383,9 +414,11 @@ void RenderPass::create_renderpass(const std::vector<Attachment> &attachments, c
 		if (!subpass.disable_depth_stencil_attachment)
 		{
 			// Assumption: depth stencil attachment appears in the list before any depth stencil resolve attachment
+			// 如果subpass没有禁用深度模板attachment，查找深度模板格式布局的attachment
 			auto it = find_if(attachments.begin(), attachments.end(), [](const Attachment attachment) { return is_depth_format(attachment.format); });
 			if (it != attachments.end())
 			{
+				// 深度模板的attachment，以及深度模板resolve attachment
 				auto i_depth_stencil = vkb::to_u32(std::distance(attachments.begin(), it));
 				auto initial_layout  = it->initial_layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : it->initial_layout;
 				depth_stencil_attachments[i].push_back(get_attachment_reference<T_AttachmentReference>(i_depth_stencil, initial_layout));
@@ -403,6 +436,7 @@ void RenderPass::create_renderpass(const std::vector<Attachment> &attachments, c
 	std::vector<T_SubpassDescription> subpass_descriptions;
 	subpass_descriptions.reserve(subpass_count);
 	VkSubpassDescriptionDepthStencilResolveKHR depth_resolve{};
+	// 每个subpass的信息
 	for (size_t i = 0; i < subpasses.size(); ++i)
 	{
 		auto &subpass = subpasses[i];
@@ -445,6 +479,7 @@ void RenderPass::create_renderpass(const std::vector<Attachment> &attachments, c
 	}
 
 	// Default subpass
+	// 如果没有提供subpass，则提供一个默认的subpass
 	if (subpasses.empty())
 	{
 		T_SubpassDescription subpass_description{};
@@ -486,6 +521,7 @@ void RenderPass::create_renderpass(const std::vector<Attachment> &attachments, c
 		color_output_count.push_back(to_u32(color_attachments[i].size()));
 	}
 
+	// subpass之间的依赖
 	const auto &subpass_dependencies = get_subpass_dependencies<T_SubpassDependency>(subpass_count, is_depth_a_dependency(subpass_descriptions, attachment_descriptions));
 
 	T_RenderPassCreateInfo create_info{};
@@ -517,6 +553,7 @@ RenderPass::RenderPass(vkb::core::DeviceC               &device,
     VulkanResource{VK_NULL_HANDLE, &device}, subpass_count{std::max<size_t>(1, subpasses.size())},        // At least 1 subpass
     color_output_count{}
 {
+	// 是否支持使用KHR2版本的创建render pass接口
 	if (device.is_extension_enabled(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME))
 	{
 		create_renderpass<VkSubpassDescription2KHR, VkAttachmentDescription2KHR, VkAttachmentReference2KHR, VkSubpassDependency2KHR, VkRenderPassCreateInfo2KHR>(
@@ -551,6 +588,8 @@ const uint32_t RenderPass::get_color_output_count(uint32_t subpass_index) const
 
 VkExtent2D RenderPass::get_render_area_granularity() const
 {
+	// 查询渲染通道的渲染区域对齐要求。这是 Vulkan 中一个非常重要但容易被忽视的函数，它确保渲染操作在平铺渲染器（Tile-Based Renderer）上高效执行。
+	// 和移动端tiled架构相关？
 	VkExtent2D render_area_granularity = {};
 	vkGetRenderAreaGranularity(get_device().get_handle(), get_handle(), &render_area_granularity);
 
