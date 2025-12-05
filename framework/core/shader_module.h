@@ -123,6 +123,7 @@ class ShaderVariant
 	 * @param size Integer specifying the wanted size of the runtime array (in number of elements, not size in bytes), used for automatic allocation of buffers.
 	 * See get_declared_struct_size_runtime_array() in spirv_cross.h
 	 */
+	// 设置storage buffer中数组的运行时大小
 	void add_runtime_array_size(const std::string &runtime_array_name, size_t size);
 
 	void set_runtime_array_sizes(const std::unordered_map<std::string, size_t> &sizes);
