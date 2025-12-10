@@ -30,6 +30,8 @@ RaytracingBasic::RaytracingBasic()
 
 	// Ray tracing related extensions required by this sample
 	add_device_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+
+	// 开启光线跟踪管线，光线发射着色器，相交着色器，最近命中着色器等。
 	add_device_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
 
 	// Required by VK_KHR_acceleration_structure
@@ -78,6 +80,7 @@ void RaytracingBasic::request_gpu_features(vkb::core::PhysicalDeviceC &gpu)
 */
 void RaytracingBasic::create_storage_image()
 {
+	// 创建storage image，光线生成着色器会写入
 	storage_image.width  = width;
 	storage_image.height = height;
 
@@ -133,6 +136,7 @@ void RaytracingBasic::create_storage_image()
 */
 uint64_t RaytracingBasic::get_buffer_device_address(VkBuffer buffer)
 {
+	// 获取buffer的gpu内存地址
 	VkBufferDeviceAddressInfoKHR buffer_device_address_info{};
 	buffer_device_address_info.sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
 	buffer_device_address_info.buffer = buffer;
@@ -144,6 +148,7 @@ uint64_t RaytracingBasic::get_buffer_device_address(VkBuffer buffer)
 */
 ScratchBuffer RaytracingBasic::create_scratch_buffer(VkDeviceSize size)
 {
+	// 创建scratch buffer，用于构建加速结构
 	ScratchBuffer scratch_buffer{};
 
 	VkBufferCreateInfo buffer_create_info = {};
@@ -177,6 +182,7 @@ ScratchBuffer RaytracingBasic::create_scratch_buffer(VkDeviceSize size)
 
 void RaytracingBasic::delete_scratch_buffer(ScratchBuffer &scratch_buffer)
 {
+	// 删除scratch buffer
 	if (scratch_buffer.memory != VK_NULL_HANDLE)
 	{
 		vkFreeMemory(get_device().get_handle(), scratch_buffer.memory, nullptr);
@@ -193,6 +199,7 @@ void RaytracingBasic::delete_scratch_buffer(ScratchBuffer &scratch_buffer)
 void RaytracingBasic::create_bottom_level_acceleration_structure()
 {
 	// Setup vertices and indices for a single triangle
+	// 创建底层加速结构，三角形
 	struct Vertex
 	{
 		float pos[3];
@@ -329,6 +336,7 @@ void RaytracingBasic::create_bottom_level_acceleration_structure()
 */
 void RaytracingBasic::create_top_level_acceleration_structure()
 {
+	// 创建顶层加速结构
 	VkTransformMatrixKHR transform_matrix = {
 	    1.0f, 0.0f, 0.0f, 0.0f,
 	    0.0f, 1.0f, 0.0f, 0.0f,
@@ -437,6 +445,7 @@ void RaytracingBasic::create_top_level_acceleration_structure()
 
 inline uint32_t aligned_size(uint32_t value, uint32_t alignment)
 {
+	// 内存对齐
 	return (value + alignment - 1) & ~(alignment - 1);
 }
 
@@ -465,6 +474,7 @@ void RaytracingBasic::create_scene()
 
 void RaytracingBasic::create_shader_binding_tables()
 {
+	// 创建shader绑定表
 	const uint32_t           handle_size            = ray_tracing_pipeline_properties.shaderGroupHandleSize;
 	const uint32_t           handle_size_aligned    = aligned_size(ray_tracing_pipeline_properties.shaderGroupHandleSize, ray_tracing_pipeline_properties.shaderGroupHandleAlignment);
 	const uint32_t           handle_alignment       = ray_tracing_pipeline_properties.shaderGroupHandleAlignment;
@@ -500,6 +510,7 @@ void RaytracingBasic::create_shader_binding_tables()
 */
 void RaytracingBasic::create_descriptor_sets()
 {
+	// 创建描述符集
 	std::vector<VkDescriptorPoolSize> pool_sizes = {
 	    {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
 	    {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
@@ -546,6 +557,7 @@ void RaytracingBasic::create_descriptor_sets()
 */
 void RaytracingBasic::create_ray_tracing_pipeline()
 {
+	// 创建光线跟踪流水线
 	// Slot for binding top level acceleration structures to the ray generation shader
 	VkDescriptorSetLayoutBinding acceleration_structure_layout_binding{};
 	acceleration_structure_layout_binding.binding         = 0;
@@ -676,6 +688,7 @@ void RaytracingBasic::create_uniform_buffer()
 */
 void RaytracingBasic::build_command_buffers()
 {
+	// 宽度高度发生变化，重新构建storage image
 	if (width != storage_image.width || height != storage_image.height)
 	{
 		// If the view port size has changed, we need to recreate the storage image
