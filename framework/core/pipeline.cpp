@@ -60,8 +60,11 @@ ComputePipeline::ComputePipeline(vkb::core::DeviceC &device,
                                  PipelineState      &pipeline_state) :
     Pipeline{device}
 {
+	// 根据pipeline state创建pipeline
+	// 获取shader module
 	const ShaderModule *shader_module = pipeline_state.get_pipeline_layout().get_shader_modules().front();
 
+	// shader module不是compute阶段，抛出异常
 	if (shader_module->get_stage() != VK_SHADER_STAGE_COMPUTE_BIT)
 	{
 		throw VulkanException{VK_ERROR_INVALID_SHADER_NV, "Shader module stage is not compute"};
@@ -84,6 +87,7 @@ ComputePipeline::ComputePipeline(vkb::core::DeviceC &device,
 		throw VulkanException{result};
 	}
 
+	// 设置debug name
 	device.get_debug_utils().set_debug_name(device.get_handle(),
 	                                        VK_OBJECT_TYPE_SHADER_MODULE, reinterpret_cast<uint64_t>(stage.module),
 	                                        shader_module->get_debug_name().c_str());
@@ -92,6 +96,7 @@ ComputePipeline::ComputePipeline(vkb::core::DeviceC &device,
 	std::vector<uint8_t>                  data{};
 	std::vector<VkSpecializationMapEntry> map_entries{};
 
+	// 设置specialization
 	const auto specialization_constant_state = pipeline_state.get_specialization_constant_state().get_specialization_constant_state();
 
 	for (const auto specialization_constant : specialization_constant_state)
@@ -108,6 +113,7 @@ ComputePipeline::ComputePipeline(vkb::core::DeviceC &device,
 
 	stage.pSpecializationInfo = &specialization_info;
 
+	// 创建计算渲染管线
 	VkComputePipelineCreateInfo create_info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
 
 	create_info.layout = pipeline_state.get_pipeline_layout().get_handle();
@@ -128,6 +134,7 @@ GraphicsPipeline::GraphicsPipeline(vkb::core::DeviceC &device,
                                    PipelineState      &pipeline_state) :
     Pipeline{device}
 {
+	// 根据pipeline state创建pipeline
 	std::vector<VkShaderModule> shader_modules;
 
 	std::vector<VkPipelineShaderStageCreateInfo> stage_create_infos;
@@ -144,12 +151,14 @@ GraphicsPipeline::GraphicsPipeline(vkb::core::DeviceC &device,
 		data.insert(data.end(), specialization_constant.second.begin(), specialization_constant.second.end());
 	}
 
+	// specialization
 	VkSpecializationInfo specialization_info{};
 	specialization_info.mapEntryCount = to_u32(map_entries.size());
 	specialization_info.pMapEntries   = map_entries.data();
 	specialization_info.dataSize      = data.size();
 	specialization_info.pData         = data.data();
 
+	// shader module
 	for (const ShaderModule *shader_module : pipeline_state.get_pipeline_layout().get_shader_modules())
 	{
 		VkPipelineShaderStageCreateInfo stage_create_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};

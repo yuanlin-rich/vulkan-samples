@@ -65,20 +65,31 @@ RayQueries::RayQueries()
 
 	// SPIRV 1.4 requires Vulkan 1.1
 	set_api_version(VK_API_VERSION_1_1);
+
+	// 允许在任何着色器阶段（顶点、片段、计算等）执行光线追踪查询。
 	add_device_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME);
 
 	// Ray tracing related extensions required by this sample
+	// 构建和管理层次包围盒BVH结构
 	add_device_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
 
 	// Required by VK_KHR_acceleration_structure
+	// 以下是创建BVH需要的拓展
+	// 获取缓冲区设备地址
 	add_device_extension(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+
+	// 延迟主机操作，允许异步构建加速结构，避免阻塞CPU。
 	add_device_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
+	// 支持Bindless渲染，对于光线追踪至关重要，因为需要访问大量纹理和缓冲区。
 	add_device_extension(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
 
 	// Required for ray queries
+	// 着色器语言版本，包含光线查询所需的新指令和功能。
 	add_device_extension(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
 
 	// Required by VK_KHR_spirv_1_4
+	// 控制浮点运算的精度和行为，对于光线追踪中的数值稳定性非常重要。
 	add_device_extension(VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
 }
 
@@ -98,8 +109,13 @@ RayQueries::~RayQueries()
 
 void RayQueries::request_gpu_features(vkb::core::PhysicalDeviceC &gpu)
 {
+	// 允许着色器直接通过地址访问内存
 	REQUEST_REQUIRED_FEATURE(gpu, VkPhysicalDeviceBufferDeviceAddressFeatures, bufferDeviceAddress);
+
+	// 启用硬件加速结构
 	REQUEST_REQUIRED_FEATURE(gpu, VkPhysicalDeviceAccelerationStructureFeaturesKHR, accelerationStructure);
+
+	// 启用光线查询功能
 	REQUEST_REQUIRED_FEATURE(gpu, VkPhysicalDeviceRayQueryFeaturesKHR, rayQuery);
 }
 
@@ -169,12 +185,16 @@ bool RayQueries::prepare(const vkb::ApplicationOptions &options)
 	}
 
 	// Get the acceleration structure features, which we'll need later on in the sample
+	// 查询加速结构的特性，硬件支持哪些加速结构的功能
+	// 是否支持加速机构，是否支持加速结构的捕获/重放，是否支持间接构建等
 	acceleration_structure_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
 	VkPhysicalDeviceFeatures2 device_features{};
 	device_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 	device_features.pNext = &acceleration_structure_features;
 	vkGetPhysicalDeviceFeatures2(get_device().get_gpu().get_handle(), &device_features);
 
+	// 查询加速结构的属性，硬件的具体能力限制和参数
+	// 最大几何体数量，最大实例数量，最大图元数量等
 	acceleration_structure_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
 	VkPhysicalDeviceProperties2 device_properties{};
 	device_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
@@ -186,13 +206,30 @@ bool RayQueries::prepare(const vkb::ApplicationOptions &options)
 	camera.set_rotation(glm::vec3(0.0f, 90.0f, 0.0f));
 	camera.set_translation(glm::vec3(0.0f, -2.0f, 0.f));
 
+	// 加载场景
 	load_scene();
+
+	// 底层加速结构
 	create_bottom_level_acceleration_structure();
+
+	// 顶层加速结构
 	create_top_level_acceleration_structure();
+
+	// uniforms
 	create_uniforms();
+
+	// 描述符池
 	create_descriptor_pool();
+
+	// 渲染流水线，这里创建了一个graphics pipeline，看起来就是完整的绘制了一遍流程？
+	// 将场景位置，相机坐标下的位置和法线传递给fragment shader，在fragment shader中用ray queries功能来计算光照
+	// 主要计算了环境光遮挡强度
 	prepare_pipelines();
+
+	// 描述符集合
 	create_descriptor_sets();
+
+	// 命令缓存
 	build_command_buffers();
 	prepared = true;
 
@@ -209,6 +246,7 @@ uint64_t RayQueries::get_buffer_device_address(VkBuffer buffer)
 
 void RayQueries::create_top_level_acceleration_structure()
 {
+	// 创建顶层加速结构
 	VkTransformMatrixKHR transform_matrix = {
 	    1.0f, 0.0f, 0.0f, 0.0f,
 	    0.0f, 1.0f, 0.0f, 0.0f,
@@ -237,6 +275,7 @@ void RayQueries::create_top_level_acceleration_structure()
 
 void RayQueries::create_bottom_level_acceleration_structure()
 {
+	// 创建底层加速结构
 	auto vertex_buffer_size = model.vertices.size() * sizeof(Vertex);
 	auto index_buffer_size  = model.indices.size() * sizeof(model.indices[0]);
 
@@ -244,11 +283,14 @@ void RayQueries::create_bottom_level_acceleration_structure()
 	// For the sake of simplicity we won't stage the vertex data to the GPU memory
 
 	// Note that the buffer usage flags for buffers consumed by the bottom level acceleration structure require special flags
+	// 这个buffer可以用于缓存区数据，并且在shader中访问gpu的地址
 	const VkBufferUsageFlags buffer_usage_flags = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
+	// 顶点数据
 	vertex_buffer = std::make_unique<vkb::core::BufferC>(get_device(), vertex_buffer_size, buffer_usage_flags, VMA_MEMORY_USAGE_CPU_TO_GPU);
 	vertex_buffer->update(model.vertices.data(), vertex_buffer_size);
 
+	// 索引数据
 	index_buffer = std::make_unique<vkb::core::BufferC>(get_device(), index_buffer_size, buffer_usage_flags, VMA_MEMORY_USAGE_CPU_TO_GPU);
 	index_buffer->update(model.indices.data(), index_buffer_size);
 
@@ -286,11 +328,16 @@ void RayQueries::load_node(vkb::scene_graph::NodeC &node)
 	if (node.has_component<vkb::sg::Mesh>())
 	{
 		auto     &mesh             = node.get_component<vkb::sg::Mesh>();
+
+		// 模型变换矩阵
 		glm::mat4 transform_matrix = node.get_transform().get_world_matrix();
+
+		// 法线变换矩阵
 		glm::mat3 normal_matrix    = glm::transpose(glm::inverse(glm::mat3(transform_matrix)));
 
 		for (auto &&sub_mesh : mesh.get_submeshes())
 		{
+			// 将顶点数据和法线数据从gpu拷贝到cpu
 			auto       pts_               = CopyBuffer<glm::vec3>{}(sub_mesh->vertex_buffers, "position");
 			const auto normals_           = CopyBuffer<glm::vec3>{}(sub_mesh->vertex_buffers, "normal");
 			const auto vertex_start_index = static_cast<uint32_t>(model.vertices.size());
@@ -302,6 +349,7 @@ void RayQueries::load_node(vkb::scene_graph::NodeC &node)
 				for (size_t i = 0; i < pts_.size(); ++i)
 				{
 					// For simplicity, pre-multiply the transformation
+					// 提前作用模型变换和法线变换
 					model.vertices[vertex_start_index + i].position = transform_matrix * sponza_scale * glm::vec4(pts_[i], 1.0f);
 					model.vertices[vertex_start_index + i].normal   = normal_matrix * normals_[i];
 				}
@@ -345,17 +393,20 @@ void RayQueries::load_scene()
 	vkb::GLTFLoader loader{get_device()};
 	auto            scene = loader.read_scene_from_file("scenes/sponza/Sponza01.gltf");
 
+	// 遍历scene中的所有mesh，将mesh的vertex和index指定到一个数组中
 	load_node(scene->get_root_node());
 }
 
 void RayQueries::create_descriptor_pool()
 {
+	// 描述符池，包含一个加速结构和一个uniform buffer
 	std::vector<VkDescriptorPoolSize> pool_sizes = {
 	    {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
 	    {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}};
 	VkDescriptorPoolCreateInfo descriptor_pool_create_info = vkb::initializers::descriptor_pool_create_info(pool_sizes, 1);
 	VK_CHECK(vkCreateDescriptorPool(get_device().get_handle(), &descriptor_pool_create_info, nullptr, &descriptor_pool));
 
+	// 描述符集合布局，包含一个加速结构和一个uniform buffer
 	std::vector<VkDescriptorSetLayoutBinding> set_layout_bindings =
 	    {
 	        vkb::initializers::descriptor_set_layout_binding(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0),
@@ -378,6 +429,7 @@ void RayQueries::create_descriptor_sets()
 	VK_CHECK(vkAllocateDescriptorSets(get_device().get_handle(), &descriptor_set_allocate_info, &descriptor_set));
 
 	// Set up the descriptor for binding our top level acceleration structure to the ray tracing shaders
+	// 设置顶层加速结构
 	VkWriteDescriptorSetAccelerationStructureKHR descriptor_acceleration_structure_info{};
 	descriptor_acceleration_structure_info.sType                      = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
 	descriptor_acceleration_structure_info.accelerationStructureCount = 1;
@@ -407,6 +459,7 @@ void RayQueries::create_descriptor_sets()
 
 void RayQueries::prepare_pipelines()
 {
+	// 创建图形管线，光线查询可以在任意的shader中进行（vertex shader，fragment shader，compute shader）
 	VkPipelineInputAssemblyStateCreateInfo input_assembly_state = vkb::initializers::pipeline_input_assembly_state_create_info(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
 
 	VkPipelineRasterizationStateCreateInfo rasterization_state = vkb::initializers::pipeline_rasterization_state_create_info(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
@@ -474,10 +527,13 @@ void RayQueries::create_uniforms()
 
 	const auto vertex_buffer_size = model.vertices.size() * sizeof(model.vertices[0]);
 	const auto index_buffer_size  = model.indices.size() * sizeof(model.indices[0]);
+	// 顶点buffer
 	vertex_buffer                 = std::make_unique<vkb::core::BufferC>(get_device(),
                                                          vertex_buffer_size,
                                                          buffer_usage_flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                                          VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+	// 索引buffer
 	index_buffer                  = std::make_unique<vkb::core::BufferC>(get_device(),
                                                         index_buffer_size,
                                                         buffer_usage_flags | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
@@ -491,6 +547,7 @@ void RayQueries::create_uniforms()
 		index_buffer->update(model.indices.data(), index_buffer_size);
 	}
 
+	// uniform buffer
 	uniform_buffer = std::make_unique<vkb::core::BufferC>(get_device(),
 	                                                      sizeof(global_uniform),
 	                                                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -500,6 +557,7 @@ void RayQueries::create_uniforms()
 
 void RayQueries::update_uniform_buffers()
 {
+	// uniform数据，包含相机位置，相机矩阵，投影矩阵，光源位置等
 	assert(!!uniform_buffer);
 	global_uniform.camera_position = camera.position;
 	global_uniform.proj            = vkb::rendering::vulkan_style_projection(camera.matrices.perspective);

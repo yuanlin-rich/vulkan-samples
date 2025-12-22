@@ -137,6 +137,7 @@ void SeparateImageSampler::setup_samplers()
 	}
 	samplerCI.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
 
+	// 创建两个sampler，分别使用linear和nearest采样 
 	// First sampler with linear filtering
 	samplerCI.magFilter = VK_FILTER_LINEAR;
 	samplerCI.minFilter = VK_FILTER_LINEAR;
@@ -223,6 +224,7 @@ void SeparateImageSampler::setup_descriptor_set_layout()
 	std::vector<VkDescriptorSetLayoutBinding> set_layout_bindings{};
 
 	// Set layout for the uniform buffer and the image
+	// 第一个描述符集合，包含uniform和图像
 	set_layout_bindings = {
 	    // Binding 0 : Vertex shader uniform buffer
 	    vkb::initializers::descriptor_set_layout_binding(
@@ -241,6 +243,7 @@ void SeparateImageSampler::setup_descriptor_set_layout()
 	VK_CHECK(vkCreateDescriptorSetLayout(get_device().get_handle(), &descriptor_layout_create_info, nullptr, &base_descriptor_set_layout));
 
 	// Set layout for the samplers
+	// 第二个描述符集合，包含采样器
 	set_layout_bindings = {
 	    // Binding 0: Fragment shader sampler
 	    vkb::initializers::descriptor_set_layout_binding(

@@ -15,6 +15,10 @@
  * limitations under the License.
  */
 
+// secondary command buffer的优势
+// 1）绘制的时候可以使用primary command buffer的render pass，避免状态切换
+// 2）在gpu上有可能并行执行
+
 #include "command_buffer_usage.h"
 
 #include <algorithm>
@@ -267,6 +271,7 @@ void CommandBufferUsage::ForwardSubpassSecondary::record_draw(vkb::core::Command
                                                               uint32_t                                                                     mesh_end,
                                                               size_t                                                                       thread_index)
 {
+	// 录制primary command buffer
 	command_buffer.set_color_blend_state(color_blend_state);
 
 	command_buffer.set_depth_stencil_state(get_depth_stencil_state());
@@ -289,6 +294,7 @@ std::shared_ptr<vkb::core::CommandBufferC>
                                                                        uint32_t                                                                     mesh_end,
                                                                        size_t                                                                       thread_index)
 {
+	// 录制secondary command buffer
 	const auto &queue = get_render_context().get_device().get_queue_by_flags(VK_QUEUE_GRAPHICS_BIT, 0);
 
 	auto secondary_command_buffer = get_render_context()
@@ -353,6 +359,7 @@ void CommandBufferUsage::ForwardSubpassSecondary::draw(vkb::core::CommandBufferC
 
 	if (use_secondary_command_buffers)
 	{
+		// 使用secondary buffer
 		std::vector<std::future<std::shared_ptr<vkb::core::CommandBufferC>>> secondary_cmd_buf_futures;
 
 		// Save the number of draws left over, these will be distributed among the first buffers
@@ -372,6 +379,7 @@ void CommandBufferUsage::ForwardSubpassSecondary::draw(vkb::core::CommandBufferC
 
 			if (state.multi_threading)
 			{
+				// 多线程渲染，将每个mesh分配到对应的线程
 				auto fut = thread_pool.push(std::bind(&CommandBufferUsage::ForwardSubpassSecondary::record_draw_secondary,
 				                                      this,
 				                                      std::ref(primary_command_buffer),
@@ -384,6 +392,7 @@ void CommandBufferUsage::ForwardSubpassSecondary::draw(vkb::core::CommandBufferC
 			}
 			else
 			{
+				// 单线程渲染
 				secondary_command_buffers.push_back(record_draw_secondary(primary_command_buffer, sorted_opaque_nodes, mesh_start, mesh_end));
 			}
 
@@ -400,6 +409,7 @@ void CommandBufferUsage::ForwardSubpassSecondary::draw(vkb::core::CommandBufferC
 	}
 	else
 	{
+		// 不使用secondary buffer
 		record_draw(primary_command_buffer, sorted_opaque_nodes, 0, opaque_submeshes);
 	}
 
@@ -412,6 +422,7 @@ void CommandBufferUsage::ForwardSubpassSecondary::draw(vkb::core::CommandBufferC
 	color_blend_state.attachments[0] = color_blend_attachment;
 
 	// Draw transparent objects
+	// 绘制透明物体不使用多线程渲染，为了保证绘制顺序正确
 	if (transparent_submeshes > 0)
 	{
 		if (use_secondary_command_buffers)

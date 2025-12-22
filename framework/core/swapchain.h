@@ -37,14 +37,31 @@ enum ImageFormat
 
 struct SwapchainProperties
 {
+	// 旧的swap chain
 	VkSwapchainKHR                old_swapchain;
+
+	// swap chain中包含多少个图像
 	uint32_t                      image_count{3};
+
+	// 图像的宽度和高度
 	VkExtent2D                    extent{};
+
+	// 交换链图像的表面格式
 	VkSurfaceFormatKHR            surface_format{};
+
+	// 交换链图像的数组层数，基本上总是1，除非进行立体渲染
 	uint32_t                      array_layers;
+
+	// 图像的使用标志
 	VkImageUsageFlags             image_usage;
+
+	// 交换链的预转换设置，只有旋转90度或180度，或者翻转
 	VkSurfaceTransformFlagBitsKHR pre_transform;
+
+	// 交换链的复合Alpha模式
 	VkCompositeAlphaFlagBitsKHR   composite_alpha;
+
+	// 交换链的显示模式，和vsync有关
 	VkPresentModeKHR              present_mode;
 };
 

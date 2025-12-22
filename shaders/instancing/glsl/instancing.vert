@@ -49,12 +49,14 @@ void main()
 	outColor = vec3(1.0);
 	outUV = vec3(inUV, instanceTexIndex);
 
+	// x轴，y轴，z轴旋转矩阵
 	mat3 mx, my, mz;
 	
 	// rotate around x
 	float s = sin(instanceRot.x + ubo.locSpeed);
 	float c = cos(instanceRot.x + ubo.locSpeed);
 
+	// mx[0]是矩阵的第一列，每个实例的速度为自己的旋转速度和局部速度的累加
 	mx[0] = vec3(c, s, 0.0);
 	mx[1] = vec3(-s, c, 0.0);
 	mx[2] = vec3(0.0, 0.0, 1.0);
@@ -75,6 +77,7 @@ void main()
 	mz[1] = vec3(0.0, c, s);
 	mz[2] = vec3(0.0, -s, c);
 	
+	// 最终的旋转矩阵
 	mat3 rotMat = mz * my * mx;
 
 	mat4 gRotMat;
@@ -89,10 +92,19 @@ void main()
 	vec4 pos = vec4((locPos.xyz * instanceScale) + instancePos, 1.0);
 
 	gl_Position = ubo.projection * ubo.modelview * gRotMat * pos;
+
+	// 法线变换
 	outNormal = mat3(ubo.modelview * gRotMat) * inverse(rotMat) * inNormal;
 
+	// 物体在相机坐标系下位置
 	pos = ubo.modelview * vec4(inPos.xyz + instancePos, 1.0);
+
+	// 光源在相机坐标系下位置
 	vec3 lPos = mat3(ubo.modelview) * ubo.lightPos.xyz;
+
+	// 光源方向
 	outLightVec = lPos - pos.xyz;
+
+	// 视角方向
 	outViewVec = -pos.xyz;		
 }

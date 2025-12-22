@@ -49,19 +49,23 @@ void Instancing::request_gpu_features(vkb::core::PhysicalDeviceC &gpu)
 	// Enable anisotropic filtering if supported
 	if (gpu.get_features().samplerAnisotropy)
 	{
+		// 启用各向异性纹理过滤
 		requested_features.samplerAnisotropy = VK_TRUE;
 	}
 	// Enable texture compression
 	if (gpu.get_features().textureCompressionBC)
 	{
+		// 支持bc纹理压缩，则开启bc纹理压缩
 		requested_features.textureCompressionBC = VK_TRUE;
 	}
 	else if (gpu.get_features().textureCompressionASTC_LDR)
 	{
+		// 支持astc纹理压缩，则开启astc纹理压缩
 		requested_features.textureCompressionASTC_LDR = VK_TRUE;
 	}
 	else if (gpu.get_features().textureCompressionETC2)
 	{
+		// 支持etc2纹理压缩，则开启etc2纹理压缩
 		requested_features.textureCompressionETC2 = VK_TRUE;
 	}
 };
@@ -123,6 +127,7 @@ void Instancing::build_command_buffers()
 		vkCmdBindVertexBuffers(draw_cmd_buffers[i], 1, 1, &instance_buffer.buffer->get_handle(), offsets);
 		vkCmdBindIndexBuffer(draw_cmd_buffers[i], rock_index_buffer->get_handle(), 0, VK_INDEX_TYPE_UINT32);
 		// Render instances
+		// 实例绘制，注意实例绘制的参数
 		vkCmdDrawIndexed(draw_cmd_buffers[i], models.rock->vertex_indices, INSTANCE_COUNT, 0, 0, 0);
 
 		draw_ui(draw_cmd_buffers[i]);
@@ -305,6 +310,7 @@ void Instancing::prepare_pipelines()
 	    // Binding point 0: Mesh vertex layout description at per-vertex rate
 	    vkb::initializers::vertex_input_binding_description(0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX),
 	    // Binding point 1: Instanced data at per-instance rate
+		// 注意这里，按照实例频率获取数据
 	    vkb::initializers::vertex_input_binding_description(1, sizeof(InstanceData), VK_VERTEX_INPUT_RATE_INSTANCE)};
 
 	// Vertex attribute bindings
@@ -348,6 +354,7 @@ void Instancing::prepare_pipelines()
 	VK_CHECK(vkCreateGraphicsPipelines(get_device().get_handle(), pipeline_cache, 1, &pipeline_create_info, nullptr, &pipelines.planet));
 
 	// Star field pipeline
+	// 星空背景生成
 	rasterization_state.cullMode         = VK_CULL_MODE_NONE;
 	depth_stencil_state.depthWriteEnable = VK_FALSE;
 	depth_stencil_state.depthTestEnable  = VK_FALSE;
@@ -361,14 +368,20 @@ void Instancing::prepare_pipelines()
 
 void Instancing::prepare_instance_data()
 {
+	// 实例数据，包含位置，旋转角度，缩放比例和纹理索引
 	std::vector<InstanceData> instance_data;
 	instance_data.resize(INSTANCE_COUNT);
 
 	std::default_random_engine              rnd_generator(lock_simulation_speed ? 0 : static_cast<unsigned>(time(nullptr)));
+
+	// 浮点数随机数
 	std::uniform_real_distribution<float>   uniform_dist(0.0, 1.0);
+
+	// 整数随机数，用于分配纹理索引
 	std::uniform_int_distribution<uint32_t> rnd_texture_index(0, textures.rocks.image->get_vk_image().get_array_layer_count());
 
 	// Distribute rocks randomly on two different rings
+	// 内环和外环
 	for (auto i = 0; i < INSTANCE_COUNT / 2; i++)
 	{
 		glm::vec2 ring0{7.0f, 11.0f};

@@ -33,6 +33,7 @@ using DeviceC = Device<vkb::BindingType::C>;
  */
 class Sampler : public VulkanResourceC<VkSampler>
 {
+	// 采样器
   public:
 	/**
 	 * @brief Creates a Vulkan Sampler

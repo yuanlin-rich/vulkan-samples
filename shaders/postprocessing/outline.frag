@@ -16,6 +16,7 @@
  * limitations under the License.
  */
 
+// 比较当前像素与周围像素的深度值，检测深度突变区域，并在这些区域绘制黑色轮廓线
 precision highp float;
 
 layout(set = 0, binding = 1) uniform sampler2D depth_sampler;

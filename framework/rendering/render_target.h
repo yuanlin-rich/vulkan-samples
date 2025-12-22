@@ -27,14 +27,20 @@ namespace vkb
  * @brief Description of render pass attachments.
  * Attachment descriptions can be used to automatically create render target images.
  */
+// attachment代表shader的输出或者后续shader的输入
+// 这里粗略的理解为render pass对应一个attachment数组，然后每个subpass根据索引来使用attachment
 struct Attachment
 {
+	// 格式
 	VkFormat format{VK_FORMAT_UNDEFINED};
 
+	// 采样个数
 	VkSampleCountFlagBits samples{VK_SAMPLE_COUNT_1_BIT};
 
+	// 图像用途
 	VkImageUsageFlags usage{VK_IMAGE_USAGE_SAMPLED_BIT};
 
+	// 图像布局
 	VkImageLayout initial_layout{VK_IMAGE_LAYOUT_UNDEFINED};
 
 	Attachment() = default;
@@ -58,6 +64,7 @@ using DeviceC = Device<vkb::BindingType::C>;
  * - Creation of a RenderTarget becomes simpler, because the caller can just ask for some
  *   Attachment (s) without having to create the images
  */
+// 渲染目标，包含多个image，image view和attachments
 class RenderTarget
 {
   public:

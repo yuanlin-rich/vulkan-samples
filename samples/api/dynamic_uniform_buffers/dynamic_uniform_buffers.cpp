@@ -26,6 +26,10 @@
  * offset used to pass data from the single uniform buffer to the connected shader binding point.
  */
 
+// dynamic unform buffer的优势：
+// 对于cpu：省掉了创建多个descriptor set的操作开销
+// 对于gpu：省掉了每次绑定descriptor set的状态切换开销
+
 #include "dynamic_uniform_buffers.h"
 
 #include "benchmark_mode/benchmark_mode.h"
@@ -35,7 +39,7 @@ DynamicUniformBuffers::DynamicUniformBuffers()
 	title = "Dynamic uniform buffers";
 }
 
-DynamicUniformBuffers ::~DynamicUniformBuffers()
+DynamicUniformBuffers::~DynamicUniformBuffers()
 {
 	if (has_device())
 	{
@@ -119,6 +123,7 @@ void DynamicUniformBuffers::build_command_buffers()
 		// Render multiple objects using different model matrices by dynamically offsetting into one uniform buffer
 		for (uint32_t j = 0; j < OBJECT_INSTANCES; j++)
 		{
+			// 注意这里，绑定descriptor set的时候传入了dynamic offset
 			// One dynamic offset per dynamic descriptor to offset into the ubo containing all model matrices
 			uint32_t dynamic_offset = j * static_cast<uint32_t>(dynamic_alignment);
 			// Bind the descriptor set for rendering a mesh using the dynamic offset
@@ -226,6 +231,7 @@ void DynamicUniformBuffers::generate_cube()
 void DynamicUniformBuffers::setup_descriptor_pool()
 {
 	// Example uses one ubo and one image sampler
+	// 注意这里，使用了动态uniform buffer类型
 	std::vector<VkDescriptorPoolSize> pool_sizes =
 	    {
 	        vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1),

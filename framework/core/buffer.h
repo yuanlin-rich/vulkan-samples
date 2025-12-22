@@ -52,10 +52,17 @@ struct BufferBuilder
   public:
 	BufferBuilder(DeviceSizeType size);
 
+	// 设置device
 	Buffer<bindingType>    build(vkb::core::Device<bindingType> &device) const;
 	BufferPtr<bindingType> build_unique(vkb::core::Device<bindingType> &device) const;
+
+	// 设置flags
 	BufferBuilder         &with_flags(BufferCreateFlagsType flags);
+
+	// 设置buffer usage
 	BufferBuilder         &with_usage(BufferUsageFlagsType usage);
+
+	// 设置内存对齐
 	BufferBuilder         &with_alignment(DeviceSizeType align);
 	DeviceSizeType         get_alignment() const
 	{

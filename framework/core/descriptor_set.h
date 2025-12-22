@@ -38,6 +38,7 @@ using DeviceC = Device<vkb::BindingType::C>;
  *
  *        Keeps track of what bindings were written to prevent a double write.
  */
+// 描述符集合
 class DescriptorSet
 {
   public:
@@ -109,8 +110,11 @@ class DescriptorSet
 
 	DescriptorPool &descriptor_pool;
 
+	// 索引是绑定点
+	// 值实际上是一个数组，用map表示，用绑定点的数组的索引指向VkDescriptorBufferInfo
 	BindingMap<VkDescriptorBufferInfo> buffer_infos;
 
+	// 索引是绑定点，值是绑定点信息
 	BindingMap<VkDescriptorImageInfo> image_infos;
 
 	VkDescriptorSet handle{VK_NULL_HANDLE};
@@ -120,6 +124,7 @@ class DescriptorSet
 
 	// The bindings of the write descriptors that have had vkUpdateDescriptorSets since the last call to update().
 	// Each binding number is mapped to a hash of the binding description that it will be updated to.
+	// 绑定点和绑定点更新操作的哈希值之间的映射
 	std::unordered_map<uint32_t, size_t> updated_bindings;
 };
 }        // namespace vkb

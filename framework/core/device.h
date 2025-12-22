@@ -221,6 +221,7 @@ inline Device<bindingType>::~Device()
 template <vkb::BindingType bindingType>
 inline void Device<bindingType>::add_queue(size_t global_index, uint32_t family_index, QueueFamilyPropertiesType const &properties, Bool32Type can_present)
 {
+	// 添加队列
 	if (queues.size() <= global_index)
 	{
 		queues.resize(global_index + 1);
@@ -245,6 +246,7 @@ inline void Device<bindingType>::copy_buffer(vkb::core::Buffer<bindingType> cons
                                              QueueType                             queue,
                                              BufferCopyType const                 *copy_region)
 {
+	// 复制缓存区
 	assert(dst.get_size() <= src.get_size());
 	assert(src.get_handle());
 
@@ -264,6 +266,7 @@ inline void Device<bindingType>::copy_buffer(vkb::core::Buffer<bindingType> cons
 template <vkb::BindingType bindingType>
 inline typename Device<bindingType>::CommandBufferType Device<bindingType>::create_command_buffer(CommandBufferLevelType level, bool begin) const
 {
+	// 创建命令缓存
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return create_command_buffer_impl(this->get_handle(), level, begin);
@@ -278,6 +281,8 @@ inline typename Device<bindingType>::CommandBufferType Device<bindingType>::crea
 template <vkb::BindingType bindingType>
 inline typename Device<bindingType>::CommandPoolType Device<bindingType>::create_command_pool(uint32_t queue_index, CommandPoolCreateFlagsType flags)
 {
+	// 创建命令缓存池
+	// 需要制定队列索引和标志
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		vk::CommandPoolCreateInfo command_pool_info{.flags = flags, .queueFamilyIndex = queue_index};
@@ -294,6 +299,7 @@ template <vkb::BindingType bindingType>
 inline std::pair<typename Device<bindingType>::ImageType, typename Device<bindingType>::DeviceMemoryType> Device<bindingType>::create_image(
     FormatType format, Extent2DType const &extent, uint32_t mip_levels, ImageUsageFlagsType usage, MemoryPropertyFlagsType properties) const
 {
+	// 创建图像
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return create_image_impl(this->get_handle(), format, extent, mip_levels, usage, properties);
@@ -312,6 +318,7 @@ inline std::pair<typename Device<bindingType>::ImageType, typename Device<bindin
 template <vkb::BindingType bindingType>
 inline void Device<bindingType>::create_internal_command_pool()
 {
+	// 创建内部命令缓存池
 	uint32_t familyIndex = get_queue_by_flags_impl(vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute, 0).get_family_index();
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
@@ -326,6 +333,7 @@ inline void Device<bindingType>::create_internal_command_pool()
 template <vkb::BindingType bindingType>
 inline void Device<bindingType>::create_internal_fence_pool()
 {
+	// 创建内部fence池
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		fence_pool = std::make_unique<vkb::HPPFencePool>(*this);
@@ -339,6 +347,7 @@ inline void Device<bindingType>::create_internal_fence_pool()
 template <vkb::BindingType bindingType>
 inline void Device<bindingType>::flush_command_buffer(CommandBufferType command_buffer, QueueType queue, bool free, SemaphoreType signal_semaphore) const
 {
+	// 刷新命令缓存
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		flush_command_buffer_impl(this->get_handle(), command_buffer, queue, free, signal_semaphore);
@@ -356,6 +365,7 @@ inline void Device<bindingType>::flush_command_buffer(CommandBufferType command_
 template <vkb::BindingType bindingType>
 inline vkb::core::CommandPool<bindingType> &Device<bindingType>::get_command_pool() const
 {
+	// 获取命令缓存池
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return *command_pool;
@@ -369,6 +379,7 @@ inline vkb::core::CommandPool<bindingType> &Device<bindingType>::get_command_poo
 template <vkb::BindingType bindingType>
 inline typename Device<bindingType>::DebugUtilsType const &Device<bindingType>::get_debug_utils() const
 {
+	// 获取调试工具
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return *debug_utils;
@@ -382,6 +393,7 @@ inline typename Device<bindingType>::DebugUtilsType const &Device<bindingType>::
 template <vkb::BindingType bindingType>
 inline typename Device<bindingType>::FencePoolType &Device<bindingType>::get_fence_pool() const
 {
+	// 获取fence池
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return *fence_pool;
@@ -395,6 +407,7 @@ inline typename Device<bindingType>::FencePoolType &Device<bindingType>::get_fen
 template <vkb::BindingType bindingType>
 inline PhysicalDevice<bindingType> const &Device<bindingType>::get_gpu() const
 {
+	// 获取当前逻辑设备对应的物理设备
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return gpu;
@@ -408,6 +421,7 @@ inline PhysicalDevice<bindingType> const &Device<bindingType>::get_gpu() const
 template <vkb::BindingType bindingType>
 inline typename Device<bindingType>::CoreQueueType const &Device<bindingType>::get_queue(uint32_t queue_family_index, uint32_t queue_index) const
 {
+	// 根据队列族的索引和队列的索引获取队列
 	assert(queue_family_index < queues.size() && "Queue family index out of bounds");
 	assert(queue_index < queues[queue_family_index].size() && "Queue index out of bounds");
 
@@ -425,6 +439,7 @@ template <vkb::BindingType bindingType>
 inline typename Device<bindingType>::CoreQueueType const &Device<bindingType>::get_queue_by_flags(QueueFlagsType required_queue_flags,
                                                                                                   uint32_t       queue_index) const
 {
+	// 根据队列标志和队列索引获取队列
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return get_queue_by_flags_impl(required_queue_flags, queue_index);
@@ -438,6 +453,7 @@ inline typename Device<bindingType>::CoreQueueType const &Device<bindingType>::g
 template <vkb::BindingType bindingType>
 inline typename Device<bindingType>::CoreQueueType const &Device<bindingType>::get_queue_by_present(uint32_t queue_index) const
 {
+	// 根据队列索引获取支持present的队列
 	auto queueIt =
 	    std::ranges::find_if(queues,
 	                         [queue_index](const std::vector<vkb::core::HPPQueue> &queue_family) { return !queue_family.empty() && queue_index < queue_family[0].get_properties().queueCount && queue_family[0].support_present(); });
@@ -459,6 +475,7 @@ inline typename Device<bindingType>::CoreQueueType const &Device<bindingType>::g
 template <vkb::BindingType bindingType>
 inline typename Device<bindingType>::ResourceCacheType &Device<bindingType>::get_resource_cache()
 {
+	// 获取资源cache
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return resource_cache;
@@ -472,6 +489,7 @@ inline typename Device<bindingType>::ResourceCacheType &Device<bindingType>::get
 template <vkb::BindingType bindingType>
 inline bool Device<bindingType>::is_extension_enabled(const char *extension) const
 {
+	// 检查扩展是否启用
 	return std::ranges::find_if(enabled_extensions, [extension](const char *enabled_extension) { return strcmp(extension, enabled_extension) == 0; }) !=
 	       enabled_extensions.end();
 }
@@ -479,6 +497,7 @@ inline bool Device<bindingType>::is_extension_enabled(const char *extension) con
 template <vkb::BindingType bindingType>
 inline bool Device<bindingType>::is_image_format_supported(FormatType format) const
 {
+	// 检查图像格式是否支持
 	// as we want to check for an error (vk::Result::eErrorFormatNotSupported) we use the non-throwing version of getImageFormatProperties here
 	vk::ImageFormatProperties format_properties;
 	return vk::Result::eErrorFormatNotSupported !=
@@ -489,6 +508,7 @@ inline bool Device<bindingType>::is_image_format_supported(FormatType format) co
 template <vkb::BindingType bindingType>
 inline void Device<bindingType>::wait_idle() const
 {
+	// 等待设备空闲
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		this->get_handle().waitIdle();
@@ -503,8 +523,10 @@ template <vkb::BindingType bindingType>
 inline void Device<bindingType>::copy_buffer_impl(
     vk::Device device, vkb::core::BufferCpp const &src, vkb::core::BufferCpp &dst, vk::Queue queue, vk::BufferCopy const *copy_region)
 {
+	// 复制缓存区实
 	vk::CommandBuffer command_buffer = create_command_buffer_impl(device, vk::CommandBufferLevel::ePrimary, true);
 
+	// 不指定复制的区域，则复制整个buffer
 	vk::BufferCopy buffer_copy;
 	if (copy_region == nullptr)
 	{
@@ -517,12 +539,14 @@ inline void Device<bindingType>::copy_buffer_impl(
 
 	command_buffer.copyBuffer(src.get_handle(), dst.get_handle(), buffer_copy);
 
+	// 提交并等待完成
 	flush_command_buffer_impl(device, command_buffer, queue);
 }
 
 template <vkb::BindingType bindingType>
 inline vk::CommandBuffer Device<bindingType>::create_command_buffer_impl(vk::Device device, vk::CommandBufferLevel level, bool begin) const
 {
+	// 创建命令缓存
 	assert(command_pool && "No command pool exists in the device");
 
 	vk::CommandBufferAllocateInfo command_buffer_allocate_info{.commandPool = command_pool->get_handle(), .level = level, .commandBufferCount = 1};
@@ -541,6 +565,7 @@ template <vkb::BindingType bindingType>
 inline std::pair<vk::Image, vk::DeviceMemory> Device<bindingType>::create_image_impl(
     vk::Device device, vk::Format format, vk::Extent2D const &extent, uint32_t mip_levels, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties) const
 {
+	// 创建图像
 	vk::ImageCreateInfo image_create_info{.imageType   = vk::ImageType::e2D,
 	                                      .format      = format,
 	                                      .extent      = {.width = extent.width, .height = extent.height, .depth = 1},
@@ -552,6 +577,7 @@ inline std::pair<vk::Image, vk::DeviceMemory> Device<bindingType>::create_image_
 
 	vk::Image image = device.createImage(image_create_info);
 
+	// 获取图像内存需求（内存大小，内存的bits）
 	vk::MemoryRequirements memory_requirements = device.getImageMemoryRequirements(image);
 
 	vk::MemoryAllocateInfo memory_allocation{.allocationSize  = memory_requirements.size,
@@ -566,6 +592,7 @@ template <vkb::BindingType bindingType>
 inline void Device<bindingType>::flush_command_buffer_impl(
     vk::Device device, vk::CommandBuffer command_buffer, vk::Queue queue, bool free, vk::Semaphore signal_semaphore) const
 {
+	// 提交并且等待命令缓存完成
 	if (command_buffer)
 	{
 		command_buffer.end();
@@ -621,9 +648,11 @@ vkb::core::HPPQueue const &Device<bindingType>::get_queue_by_flags_impl(vk::Queu
 template <vkb::BindingType bindingType>
 inline void Device<bindingType>::init(std::unordered_map<const char *, bool> const &requested_extensions, std::function<void(vkb::core::PhysicalDevice<bindingType> &)> request_gpu_features)
 {
+	// 初始化逻辑设备，需要提供请求开启的扩展和拓展特性
 	LOGI("Selected GPU: {}", *gpu.get_properties().deviceName);
 
 	// Prepare the device queues
+	// 这里的实现是把所有的队列族的所有队列都创建出来
 	std::vector<vk::QueueFamilyProperties> queue_family_properties = gpu.get_queue_family_properties();
 	std::vector<vk::DeviceQueueCreateInfo> queue_create_infos;
 	std::vector<std::vector<float>>        queue_priorities;
@@ -647,7 +676,10 @@ inline void Device<bindingType>::init(std::unordered_map<const char *, bool> con
 	}
 
 	// Check extensions to enable Vma Dedicated Allocation
+	// 更灵活的内存需求查询方式，允许查询多个对象的组合内存需求，而不仅仅是单个对象
 	bool can_get_memory_requirements = gpu.is_extension_supported("VK_KHR_get_memory_requirements2");
+
+	// 允许为特定资源（如图像或缓冲区）分配专用的内存块，而不是从共享的内存池中分配。
 	bool has_dedicated_allocation    = gpu.is_extension_supported("VK_KHR_dedicated_allocation");
 
 	if (can_get_memory_requirements && has_dedicated_allocation)
@@ -660,6 +692,7 @@ inline void Device<bindingType>::init(std::unordered_map<const char *, bool> con
 
 	// For performance queries, we also use host query reset since queryPool resets cannot
 	// live in the same command buffer as beginQuery
+	// 性能计数器相关
 	if (gpu.is_extension_supported("VK_KHR_performance_query") &&
 	    gpu.is_extension_supported("VK_EXT_host_query_reset"))
 	{

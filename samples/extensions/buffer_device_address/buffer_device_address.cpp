@@ -23,11 +23,16 @@ BufferDeviceAddress::BufferDeviceAddress()
 
 	// Need to enable buffer device address extension.
 	add_instance_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+
+	// 可以获取缓冲区设备地址
 	add_device_extension(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
 
 	// Provides support for VkAllocateMemoryFlagsInfo. Otherwise, core in Vulkan 1.1.
+	// 多gpu支持
 	add_device_extension(VK_KHR_DEVICE_GROUP_EXTENSION_NAME);
+	
 	// Required by VK_KHR_device_group.
+	// 支持设备组的创建
 	add_instance_extension(VK_KHR_DEVICE_GROUP_CREATION_EXTENSION_NAME);
 }
 

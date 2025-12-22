@@ -101,8 +101,10 @@ class ResourceCache
 	                                                   const std::vector<ShaderModule *> &shader_modules,
 	                                                   const std::vector<ShaderResource> &set_resources);
 
+	// 申请图形管线
 	GraphicsPipeline &request_graphics_pipeline(PipelineState &pipeline_state);
 
+	// 申请计算管线
 	ComputePipeline &request_compute_pipeline(PipelineState &pipeline_state);
 
 	DescriptorSet &request_descriptor_set(DescriptorSetLayout                      &descriptor_set_layout,

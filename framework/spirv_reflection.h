@@ -36,28 +36,33 @@ namespace vkb
 /// Generate a list of shader resource based on SPIRV reflection code, and provided ShaderVariant
 class SPIRVReflection
 {
+	// spirv shader的反射工具
   public:
 	/// @brief Reflects shader resources from SPIRV code
 	/// @param stage The Vulkan shader stage flag
 	/// @param spirv The SPIRV code of shader
 	/// @param[out] resources The list of reflected shader resources
 	/// @param variant ShaderVariant used for reflection to specify the size of the runtime arrays in Storage Buffers
+	// variant提供storage buffer的数组大小（shader中看不出来，反射的时候可以设置）
 	bool reflect_shader_resources(VkShaderStageFlagBits        stage,
 	                              const std::vector<uint32_t> &spirv,
 	                              std::vector<ShaderResource> &resources,
 	                              const ShaderVariant         &variant);
 
   private:
+	// 解析shader资源
 	void parse_shader_resources(const spirv_cross::Compiler &compiler,
 	                            VkShaderStageFlagBits        stage,
 	                            std::vector<ShaderResource> &resources,
 	                            const ShaderVariant         &variant);
 
+	// 解析push constants
 	void parse_push_constants(const spirv_cross::Compiler &compiler,
 	                          VkShaderStageFlagBits        stage,
 	                          std::vector<ShaderResource> &resources,
 	                          const ShaderVariant         &variant);
 
+	// 解析specialization
 	void parse_specialization_constants(const spirv_cross::Compiler &compiler,
 	                                    VkShaderStageFlagBits        stage,
 	                                    std::vector<ShaderResource> &resources,

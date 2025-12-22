@@ -123,6 +123,7 @@ void shutdown();
 template <vkb::BindingType bindingType, typename HandleType>
 class Allocated : public vkb::core::VulkanResource<bindingType, HandleType>
 {
+	// 所有需要分配内存的gpu资源的父类
   public:
 	using ParentType = vkb::core::VulkanResource<bindingType, HandleType>;
 
@@ -379,6 +380,7 @@ class Allocated : public vkb::core::VulkanResource<bindingType, HandleType>
 	 * @note This is initialized at allocation time to avoid subsequent need to call a function to fetch the
 	 * allocation information from the VMA, since this property won't change for the lifetime of the allocation.
 	 */
+	// 在写入数据后不需要调用flush函数
 	bool coherent = false;
 	/**
 	 * @brief This flag is set to true if the memory is persistently mapped (i.e. not just HOST_VISIBLE, but available
@@ -387,6 +389,7 @@ class Allocated : public vkb::core::VulkanResource<bindingType, HandleType>
 	 * @note This is initialized at allocation time to avoid subsequent need to call a function to fetch the
 	 * allocation information from the VMA, since this property won't change for the lifetime of the allocation.
 	 */
+	// map是永久的，不需要频繁的map和unmap
 	bool persistent = false;
 };
 

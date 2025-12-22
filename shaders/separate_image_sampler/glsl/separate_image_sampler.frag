@@ -16,6 +16,7 @@
  * limitations under the License.
  */
 
+// 分离图像和采样器，注意这里的类型
 layout (set = 0, binding = 1) uniform texture2D _texture;
 layout (set = 1, binding = 0) uniform sampler _sampler;
 

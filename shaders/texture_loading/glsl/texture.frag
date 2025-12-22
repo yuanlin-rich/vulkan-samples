@@ -16,6 +16,7 @@
  * limitations under the License.
  */
 
+// sampler2D，图像和采样器合并
 layout (binding = 1) uniform sampler2D samplerColor;
 
 layout (location = 0) in vec2 inUV;
@@ -30,12 +31,24 @@ void main()
 {
 	vec4 color = texture(samplerColor, inUV, inLodBias);
 
+	// 法线
 	vec3 N = normalize(inNormal);
+
+	// 光线方向
 	vec3 L = normalize(inLightVec);
+
+	// 视角方向
 	vec3 V = normalize(inViewVec);
+
+	// 镜像方向
 	vec3 R = reflect(-L, N);
+
+	// 漫反射
 	vec3 diffuse = max(dot(N, L), 0.0) * vec3(1.0);
+
+	// 镜像反射
 	float specular = pow(max(dot(R, V), 0.0), 16.0) * color.a;
 
+	// 输出的光源
 	outFragColor = vec4(diffuse * color.rgb + specular, 1.0);	
 }

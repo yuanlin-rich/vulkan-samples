@@ -1525,6 +1525,8 @@ RaytracingExtended::RaytracingScene::RaytracingScene(vkb::core::DeviceC &device,
 				auto  &textures        = material->textures;
 				size_t textureIndex    = std::numeric_limits<size_t>::max();
 				auto   baseTextureIter = textures.find("base_color_texture");
+
+				// 对花瓶特殊处理
 				bool   is_vase         = false;
 				if (baseTextureIter != textures.cend())
 				{
@@ -1535,8 +1537,12 @@ RaytracingExtended::RaytracingScene::RaytracingScene(vkb::core::DeviceC &device,
 					}
 
 					const auto name             = texture->get_image()->get_name();
+
+					// 特殊处理：识别并单独处理花瓶
 					is_vase                     = (name.find("vase_dif.ktx") != std::basic_string<char>::npos);
 					textureIndex                = imageInfos.size();
+
+					// 创建image view视图
 					auto                  image = texture->get_image();
 					VkDescriptorImageInfo imageInfo;
 					imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1545,6 +1551,7 @@ RaytracingExtended::RaytracingScene::RaytracingScene(vkb::core::DeviceC &device,
 					imageInfos.push_back(imageInfo);
 				}
 
+				// 拷贝顶点，纹理坐标，法线信息
 				auto       pts_      = CopyBuffer<glm::vec3>{}(sub_mesh->vertex_buffers, "position");
 				const auto UV_coords = CopyBuffer<glm::vec2>{}(sub_mesh->vertex_buffers, "texcoord_0");
 				const auto normals_  = CopyBuffer<glm::vec3>{}(sub_mesh->vertex_buffers, "normal");
@@ -1552,6 +1559,7 @@ RaytracingExtended::RaytracingScene::RaytracingScene(vkb::core::DeviceC &device,
 				auto transform = scenesToLoad[sceneIndex].transform;
 				if (is_vase)
 				{
+					// 花瓶单独处理
 					const float sponza_scale = 0.01f;
 					transform                = glm::mat3x4{0.f, 0.f, sponza_scale, 4.3f,
                                             sponza_scale, 0.f, 0.f, 0.f,
@@ -1559,6 +1567,7 @@ RaytracingExtended::RaytracingScene::RaytracingScene(vkb::core::DeviceC &device,
 				}
 				for (auto &&pt : pts_)
 				{
+					// 坐标变换应用到每个点上
 					const auto translation = glm::vec3(transform[0][3], transform[1][3], transform[2][3]);
 					pt                     = glm::vec3(glm::mat4(transform) * glm::vec4(pt, 1.f)) + translation;
 				}
@@ -1569,6 +1578,7 @@ RaytracingExtended::RaytracingScene::RaytracingScene(vkb::core::DeviceC &device,
 				model.vertices.resize(pts_.size());
 				for (size_t i = 0; i < pts_.size(); ++i)
 				{
+					// 位置，纹理坐标，法线
 					auto tex_coords             = i < UV_coords.size() ? UV_coords[i] : glm::vec2{};
 					auto normal                 = i < normals_.size() ? normals_[i] : glm::vec3{};
 					model.vertices[i].pos       = pts_[i];
@@ -1580,6 +1590,7 @@ RaytracingExtended::RaytracingScene::RaytracingScene(vkb::core::DeviceC &device,
 				auto buffer = sub_mesh->index_buffer.get();
 				if (buffer)
 				{
+					// 索引
 					const size_t sz         = buffer->get_size();
 					const size_t nTriangles = sz / sizeof(uint16_t) / 3;
 					model.triangles.resize(nTriangles);

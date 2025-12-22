@@ -16,16 +16,25 @@
  * limitations under the License.
  */
 
+// 启动mesh shader扩展
 #extension GL_EXT_mesh_shader: require
+
+// 允许在glsl中使用#include
 #extension GL_GOOGLE_include_directive: require
+
+// 1. subgroupBallot：单条指令收集所有投票
+// 2. subgroupBallotBitCount：单条指令统计总数
+// 3. subgroupBallotExclusiveBitCount：单条指令计算索引
 #extension GL_KHR_shader_subgroup_ballot : require                  // subgroupBallot, subgroupBallotBitCount, subgroupBallotExclusiveBitCount
 
 #include "mesh_shader_shared.h"
 
 // Use numTaskInvocationsX * numTaskInvocationsY task shader invocations per task shader workgroup,
 // resulting in N * N * numTaskInvocationsX * numTaskInvocationsY invocations
+// 本地工作组大小
 layout(local_size_x = numTaskInvocationsX, local_size_y = numTaskInvocationsY, local_size_z = 1) in;
 
+// 从cpu传递来的，剔除中心，剔除半径，网格密度
 layout (binding = 0) uniform UBO
 {
     float cull_center_x;
@@ -34,6 +43,7 @@ layout (binding = 0) uniform UBO
     float meshlet_density;
 } ubo;
 
+// mesh shader架构中任务着色器与网格着色器之间传递数据的关键机制
 taskPayloadSharedEXT SharedData sharedData;
 
 float square(float x)
@@ -49,6 +59,7 @@ float square(vec2 p )
 void main()
 {
     // calculate size and offset of sub-rect per task shader invocation
+    // 全局范围(-1，1)，计算当前工作组负责的小块矩形的大小和偏移
     vec2 size = 2.0f / ( gl_NumWorkGroups.xy * gl_WorkGroupSize.xy );
     vec2 offset = gl_GlobalInvocationID.xy * size;
 
@@ -61,19 +72,26 @@ void main()
     vec2 p2 = p0 + size;
     vec2 p3 = p0 + vec2(0.0f, size.y);
     float squaredRadius = square(ubo.cull_radius);
+
+    // 当前矩形是否在剔除范围内
     bool isValid = ( square(p0) < squaredRadius )
                     && ( square(p1) < squaredRadius )
                     && ( square(p2) < squaredRadius)
                     && ( square(p3) < squaredRadius);
     // contribute a single bit by this task shader invocation
+    // uvec4最多处理128个调用
     uvec4 validVotes = subgroupBallot(isValid);
 
+    // 这里缺少同步，代码缺陷，或者由subgroupBallotExclusiveBitCount自动保证同步
     if ( isValid )
     {
         // get the next free index into the offsets array
+        // subgroupBallotExclusiveBitCount计算前面valid的个数
         uint index = subgroupBallotExclusiveBitCount(validVotes);
         sharedData.offsets[index] = offset;
     }
+
+    // 这里缺少同步，代码缺陷，或者由subgroupBallotBitCount自动保证同步
     if ( gl_LocalInvocationIndex == 0 )
     {
         // for just one task shader invocation we can emit mesh shaders

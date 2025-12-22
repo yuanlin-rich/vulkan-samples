@@ -57,6 +57,7 @@ void DescriptorSet::reset(const BindingMap<VkDescriptorBufferInfo> &new_buffer_i
 
 void DescriptorSet::prepare()
 {
+	// 准备write_descriptor_sets，也就是描述符集合的更新信息
 	// We don't want to prepare twice during the life cycle of a Descriptor Set
 	if (!write_descriptor_sets.empty())
 	{
@@ -65,14 +66,17 @@ void DescriptorSet::prepare()
 	}
 
 	// Iterate over all buffer bindings
+	// 更新缓冲区的绑定信息
 	for (auto &binding_it : buffer_infos)
 	{
 		auto  binding_index   = binding_it.first;
 		auto &buffer_bindings = binding_it.second;
 
+		// 根据索引获取绑定点信息
 		if (auto binding_info = descriptor_set_layout.get_layout_binding(binding_index))
 		{
 			// Iterate over all binding buffers in array
+			// 绑定点本身可能绑定了一个数组
 			for (auto &element_it : buffer_bindings)
 			{
 				auto &buffer_info = element_it.second;
@@ -102,7 +106,10 @@ void DescriptorSet::prepare()
 				write_descriptor_set.descriptorType  = binding_info->descriptorType;
 				write_descriptor_set.pBufferInfo     = &buffer_info;
 				write_descriptor_set.dstSet          = handle;
+				// 如果描述符是一个数组，指定从数组的哪个元素开始更新。如果描述符不是数组，则设置为0
 				write_descriptor_set.dstArrayElement = element_it.first;
+
+				// 要更新的描述符数量。如果描述符是数组，则可以一次更新多个连续的数组元素
 				write_descriptor_set.descriptorCount = 1;
 
 				write_descriptor_sets.push_back(write_descriptor_set);
@@ -148,6 +155,7 @@ void DescriptorSet::prepare()
 
 void DescriptorSet::update(const std::vector<uint32_t> &bindings_to_update)
 {
+	// 更新指定的绑定点，如果是重复更新的操作则去除
 	std::vector<VkWriteDescriptorSet> write_operations;
 	std::vector<size_t>               write_operation_hashes;
 
@@ -155,13 +163,17 @@ void DescriptorSet::update(const std::vector<uint32_t> &bindings_to_update)
 	// (but skipping all to-update bindings that haven't been written yet)
 	if (bindings_to_update.empty())
 	{
+		// 如果bindings_to_update为空，更新所有的绑定点
 		for (size_t i = 0; i < write_descriptor_sets.size(); i++)
 		{
 			const auto &write_operation = write_descriptor_sets[i];
 
+			// 计算更新操作的哈希值
 			size_t write_operation_hash = 0;
 			hash_param(write_operation_hash, write_operation);
 
+			// 从哈希表中查找当前更新操作的哈希值
+			// 如果找不到，或者哈希值不同，才执行更新，并且哈希值也更新
 			auto update_pair_it = updated_bindings.find(write_operation.dstBinding);
 			if (update_pair_it == updated_bindings.end() || update_pair_it->second != write_operation_hash)
 			{
@@ -213,6 +225,7 @@ void DescriptorSet::update(const std::vector<uint32_t> &bindings_to_update)
 
 void DescriptorSet::apply_writes() const
 {
+	// 更新所有的绑定点
 	vkUpdateDescriptorSets(device.get_handle(),
 	                       to_u32(write_descriptor_sets.size()),
 	                       write_descriptor_sets.data(),

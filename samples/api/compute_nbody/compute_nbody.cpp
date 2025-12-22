@@ -29,6 +29,7 @@ ComputeNBody::ComputeNBody()
 	camera.type = vkb::CameraType::LookAt;
 
 	// Note: Using reversed depth-buffer for increased precision, so Z-Near and Z-Far are flipped
+	// 这里是为了让远处的z值精度更高
 	camera.set_perspective(60.0f, static_cast<float>(width) / static_cast<float>(height), 512.0f, 0.1f);
 	camera.set_rotation(glm::vec3(-26.0f, 75.0f, 0.0f));
 	camera.set_translation(glm::vec3(0.0f, 0.0f, -14.0f));
@@ -103,6 +104,7 @@ void ComputeNBody::build_command_buffers()
 		// Acquire
 		if (graphics.queue_family_index != compute.queue_family_index)
 		{
+			// 如果图形队列和计算队列不是同一个，需要用barrier将buffer所有权转移到计算队列
 			VkBufferMemoryBarrier buffer_barrier =
 			    {
 			        VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -140,6 +142,7 @@ void ComputeNBody::build_command_buffers()
 		vkCmdEndRenderPass(draw_cmd_buffers[i]);
 
 		// Release barrier
+		// 将storage buffer重新转移回计算队列
 		if (graphics.queue_family_index != compute.queue_family_index)
 		{
 			VkBufferMemoryBarrier buffer_barrier =
@@ -175,6 +178,7 @@ void ComputeNBody::build_compute_command_buffer()
 	VK_CHECK(vkBeginCommandBuffer(compute.command_buffer, &command_buffer_begin_info));
 
 	// Acquire
+	// 将storage buffer所有权转移到计算队列
 	if (graphics.queue_family_index != compute.queue_family_index)
 	{
 		VkBufferMemoryBarrier buffer_barrier =
@@ -257,6 +261,7 @@ void ComputeNBody::build_compute_command_buffer()
 }
 
 // Setup and fill the compute shader storage buffers containing the particles
+// 初始化粒子的位置和速度，并且写入compute storage buffer中
 void ComputeNBody::prepare_storage_buffers()
 {
 #if 0

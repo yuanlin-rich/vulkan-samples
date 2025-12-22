@@ -25,6 +25,8 @@ namespace vkb
 {
 namespace
 {
+// 根据自定义的shader resource type获取对应的VkDescriptorType
+// 有可能包含dynamic变量
 inline VkDescriptorType find_descriptor_type(ShaderResourceType resource_type, bool dynamic)
 {
 	switch (resource_type)
@@ -70,22 +72,27 @@ inline VkDescriptorType find_descriptor_type(ShaderResourceType resource_type, b
 	}
 }
 
+// 检查绑定点是否合法，主要是检查binding的VkDescriptorType在blacklist中是否能找到
+// 能找到则不合法
 inline bool validate_binding(const VkDescriptorSetLayoutBinding &binding, const std::vector<VkDescriptorType> &blacklist)
 {
 	return !(std::ranges::find_if(blacklist, [binding](const VkDescriptorType &type) { return type == binding.descriptorType; }) != blacklist.end());
 }
 
+// 检查绑定点的flags是否合法
 inline bool validate_flags(vkb::core::PhysicalDeviceC const                &gpu,
                            const std::vector<VkDescriptorSetLayoutBinding> &bindings,
                            const std::vector<VkDescriptorBindingFlagsEXT>  &flags)
 {
 	// Assume bindings are valid if there are no flags
+	// 没有flags是合法清空
 	if (flags.empty())
 	{
 		return true;
 	}
 
 	// Binding count has to equal flag count as its a 1:1 mapping
+	// 绑定点和绑定点的flags不是一一对应的，则非法
 	if (bindings.size() != flags.size())
 	{
 		LOGE("Binding count has to be equal to flag count.");
@@ -111,6 +118,7 @@ DescriptorSetLayout::DescriptorSetLayout(vkb::core::DeviceC                &devi
 	for (auto &resource : resource_set)
 	{
 		// Skip shader resources whitout a binding point
+		// 跳过不带绑定点的shader资源
 		if (resource.type == ShaderResourceType::Input ||
 		    resource.type == ShaderResourceType::Output ||
 		    resource.type == ShaderResourceType::PushConstant ||
@@ -124,6 +132,7 @@ DescriptorSetLayout::DescriptorSetLayout(vkb::core::DeviceC                &devi
 
 		if (resource.mode == ShaderResourceMode::UpdateAfterBind)
 		{
+			// 允许在绑定后更新，也就是vkCmdBindDescriptorSet之后也可以调用vkUpdateDescriptorSets更新描述符集合
 			binding_flags.push_back(VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT);
 		}
 		else
@@ -137,18 +146,28 @@ DescriptorSetLayout::DescriptorSetLayout(vkb::core::DeviceC                &devi
 		// Convert ShaderResource to VkDescriptorSetLayoutBinding
 		VkDescriptorSetLayoutBinding layout_binding{};
 
+		// 绑定点索引
 		layout_binding.binding         = resource.binding;
+
+		// 绑定点数组长度
 		layout_binding.descriptorCount = resource.array_size;
+
+		// 绑定点资源类型
 		layout_binding.descriptorType  = descriptor_type;
+
+		// 绑定点在哪些shader中可见
 		layout_binding.stageFlags      = static_cast<VkShaderStageFlags>(resource.stages);
 
 		bindings.push_back(layout_binding);
 
 		// Store mapping between binding and the binding point
+		// 根据绑定点的索引，查找绑定点
 		bindings_lookup.emplace(resource.binding, layout_binding);
 
+		// 根据绑定点的索引，查找绑定点flags
 		binding_flags_lookup.emplace(resource.binding, binding_flags.back());
 
+		// 根据资源名，查找绑定点
 		resources_lookup.emplace(resource.name, resource.binding);
 	}
 
@@ -162,13 +181,16 @@ DescriptorSetLayout::DescriptorSetLayout(vkb::core::DeviceC                &devi
 	if (std::ranges::find_if(resource_set,
 	                         [](const ShaderResource &shader_resource) { return shader_resource.mode == ShaderResourceMode::UpdateAfterBind; }) != resource_set.end())
 	{
+		// 处理绑定后更新的情况，如果有任何一个资源是绑定后更新，则执行后续逻辑
 		// Spec states you can't have ANY dynamic resources if you have one of the bindings set to update-after-bind
 		if (std::ranges::find_if(resource_set,
 		                         [](const ShaderResource &shader_resource) { return shader_resource.mode == ShaderResourceMode::Dynamic; }) != resource_set.end())
 		{
+			// 绑定后更新和动态资源不能同时在同一个descriptor set里面
 			throw std::runtime_error("Cannot create descriptor set layout, dynamic resources are not allowed if at least one resource is update-after-bind.");
 		}
 
+		// 检查flag是否合法
 		if (!validate_flags(device.get_gpu(), bindings, binding_flags))
 		{
 			throw std::runtime_error("Invalid binding, couldn't create descriptor set layout.");
@@ -177,7 +199,12 @@ DescriptorSetLayout::DescriptorSetLayout(vkb::core::DeviceC                &devi
 		binding_flags_create_info.bindingCount  = to_u32(binding_flags.size());
 		binding_flags_create_info.pBindingFlags = binding_flags.data();
 
+		// 把绑定点的flags信息添加给创建descriptor set layout的结构体
 		create_info.pNext = &binding_flags_create_info;
+
+		// 检查绑定标志数组中是否有 VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT
+		// 如果有，添加 VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT 到布局标志中
+		// 这个标志表明：此布局将从支持 UpdateAfterBind 的描述符池中分配
 		create_info.flags |= std::ranges::find(binding_flags, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT) != binding_flags.end() ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT : 0;
 	}
 

@@ -63,20 +63,32 @@ class DescriptorSetLayout
 
 	DescriptorSetLayout &operator=(DescriptorSetLayout &&) = delete;
 
+	// descriptor set layout的handle
 	VkDescriptorSetLayout get_handle() const;
 
+	// descriptor set 在shader中的索引
 	const uint32_t get_index() const;
 
+	// descriptor set layout中包含的绑定点
 	const std::vector<VkDescriptorSetLayoutBinding> &get_bindings() const;
 
+	// 根据索引获取绑定点
 	std::unique_ptr<VkDescriptorSetLayoutBinding> get_layout_binding(const uint32_t binding_index) const;
 
+	// 根据名字获取绑定点
 	std::unique_ptr<VkDescriptorSetLayoutBinding> get_layout_binding(const std::string &name) const;
 
+	// 获取绑定点的flags
+	// 这些标志允许开发者在描述符绑定上指定一些非标准的行为，例如：
+	// 允许描述符绑定中的描述符数量在运行时变化（可变大小）
+	// 允许更新已绑定的描述符集
+	// 允许部分绑定等。
 	const std::vector<VkDescriptorBindingFlagsEXT> &get_binding_flags() const;
 
+	// 根据索引获取绑定点的flags
 	VkDescriptorBindingFlagsEXT get_layout_binding_flag(const uint32_t binding_index) const;
 
+	// 获取descriptor set layout在哪些shader module中可见
 	const std::vector<ShaderModule *> &get_shader_modules() const;
 
   private:

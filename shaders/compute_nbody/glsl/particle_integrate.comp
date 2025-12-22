@@ -38,6 +38,7 @@ layout (binding = 1) uniform UBO
 
 #define TIME_FACTOR 0.05
 
+// 根据每个粒子的速度更新位置
 void main() 
 {
 	int index = int(gl_GlobalInvocationID);

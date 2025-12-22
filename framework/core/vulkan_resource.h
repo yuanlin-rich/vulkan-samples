@@ -41,6 +41,7 @@ using DeviceCpp = Device<vkb::BindingType::Cpp>;
 template <vkb::BindingType bindingType, typename Handle>
 class VulkanResource
 {
+	// vulkan所有资源类的公共基础类型，可以获取和设置调试信息，可以获取资源和设备的handle
   public:
 	// we always want to store a vk::Handle as a resource, so we have to figure out that type, depending on the BindingType!
 	using ResourceType = typename vkb::VulkanTypeMapping<bindingType, Handle>::Type;

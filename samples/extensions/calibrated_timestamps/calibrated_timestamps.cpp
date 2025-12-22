@@ -15,6 +15,11 @@
  * limitations under the License.
  */
 
+// 这是一个用于性能分析和调试的工具，可以精确测量
+// GPU 执行时间（设备时间）
+// CPU 时间（系统单调时钟）
+// 两者之间的对齐关系
+
 #include "calibrated_timestamps.h"
 
 std::string time_domain_to_string(VkTimeDomainEXT input_time_domain)

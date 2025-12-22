@@ -74,12 +74,21 @@ const std::string to_string(VkResolveModeFlagBits mode)
 MSAASample::MSAASample()
 {
 	// Extension of interest in this sample (optional)
+	// 允许在多重采样渲染时解析深度/模板附件
 	add_device_extension(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME, true);
 
 	// Extension dependency requirements (given that instance API version is 1.0.0)
 	add_instance_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, true);
+
+	// 更灵活渲染通道的方式
 	add_device_extension(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME, true);
+
+	// 允许某些格式作为输入附件
+	// 改进图像视图创建规则
+	// 为后续扩展提供基础
 	add_device_extension(VK_KHR_MAINTENANCE2_EXTENSION_NAME, true);
+
+	// 单次渲染通道渲染到多个视图（如VR的左眼/右眼）
 	add_device_extension(VK_KHR_MULTIVIEW_EXTENSION_NAME, true);
 
 	auto &config = get_configuration();
@@ -98,11 +107,13 @@ bool MSAASample::prepare(const vkb::ApplicationOptions &options)
 		return false;
 	}
 
+	// 查找颜色和深度都支持的msaa采样点个数
 	prepare_supported_sample_count_list();
 
 	depth_writeback_resolve_supported = get_device().is_extension_enabled(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
 	if (depth_writeback_resolve_supported)
 	{
+		// 查找所有深度的解析类型
 		prepare_depth_resolve_mode_list();
 	}
 
@@ -117,10 +128,12 @@ bool MSAASample::prepare(const vkb::ApplicationOptions &options)
 	scene_pipeline                  = std::make_unique<vkb::RenderPipeline>();
 	scene_pipeline->add_subpass(std::move(scene_subpass));
 
+	// 绘制轮廓线，不带多重采样的版本
 	postprocessing_pipeline = std::make_unique<vkb::PostProcessingPipeline>(get_render_context(), vkb::ShaderSource{"postprocessing/postprocessing.vert.spv"});
 	postprocessing_pipeline->add_pass()
 	    .add_subpass(vkb::ShaderSource{"postprocessing/outline.frag.spv"});
 
+	// 绘制轮廓线，带多重采样的版本
 	ms_depth_postprocessing_pipeline = std::make_unique<vkb::PostProcessingPipeline>(get_render_context(), vkb::ShaderSource{"postprocessing/postprocessing.vert.spv"});
 	ms_depth_postprocessing_pipeline->add_pass()
 	    .add_subpass(vkb::ShaderSource{"postprocessing/outline_ms_depth.frag.spv"});
@@ -156,6 +169,8 @@ std::unique_ptr<vkb::RenderTarget> MSAASample::create_render_target(vkb::core::I
 		if (msaa_enabled && depth_writeback_resolve_supported && resolve_depth_on_writeback)
 		{
 			// Depth is resolved
+			// 表示图像数据不需要持久保存，仅在渲染操作期间临时使用
+			// 典型例子：多重采样颜色附件、深度/模板附件
 			depth_usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
 			depth_resolve_usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
 		}
@@ -564,6 +579,7 @@ void MSAASample::draw(vkb::core::CommandBufferC &command_buffer, vkb::RenderTarg
 	if (run_postprocessing)
 	{
 		// Run a second renderpass
+		// 后处理，绘制轮廓线
 		postprocessing(command_buffer, render_target, swapchain_layout, msaa_enabled);
 	}
 
@@ -586,6 +602,7 @@ void MSAASample::postprocessing(vkb::core::CommandBufferC &command_buffer,
                                 VkImageLayout             &swapchain_layout,
                                 bool                       msaa_enabled)
 {
+	// 是否使用mass版本的深度缓存
 	auto        depth_attachment   = (msaa_enabled && depth_writeback_resolve_supported && resolve_depth_on_writeback) ? i_depth_resolve : i_depth;
 	bool        multisampled_depth = msaa_enabled && !(depth_writeback_resolve_supported && resolve_depth_on_writeback);
 	std::string depth_sampler_name = multisampled_depth ? "ms_depth_sampler" : "depth_sampler";
@@ -626,8 +643,10 @@ void MSAASample::resolve_color_separate_pass(vkb::core::CommandBufferC          
                                              uint32_t                                 color_destination,
                                              VkImageLayout                           &color_layout)
 {
+	// 通过一个单独的render pass来resolve颜色图像
 	{
 		// The multisampled color is the source of the resolve operation
+		// 多重采样版本的颜色缓冲区，从颜色输出格式改为拷贝目标源头格式
 		vkb::ImageMemoryBarrier memory_barrier{};
 		memory_barrier.old_layout      = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 		memory_barrier.new_layout      = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -651,6 +670,7 @@ void MSAASample::resolve_color_separate_pass(vkb::core::CommandBufferC          
 
 	{
 		// Prepare destination image for transfer operation
+		// 非多重采样版本的颜色缓冲区，从颜色输出格式改为拷贝目标源头格式
 		auto color_new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
 		vkb::ImageMemoryBarrier memory_barrier{};
@@ -668,9 +688,11 @@ void MSAASample::resolve_color_separate_pass(vkb::core::CommandBufferC          
 	}
 
 	// Resolve multisampled attachment to destination, extremely expensive
+	// 颜色解析，将多重采样版本的颜色缓冲区拷贝到非多重采样版本的颜色缓冲区
 	command_buffer.resolve_image(views[i_color_ms].get_image(), views.at(color_destination).get_image(), {image_resolve});
 
 	// Transition attachments out of transfer stage
+	// 重新转为颜色输出格式
 	{
 		auto color_new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
@@ -702,9 +724,11 @@ void MSAASample::resolve_color_separate_pass(vkb::core::CommandBufferC          
 
 void MSAASample::prepare_supported_sample_count_list()
 {
+	// 找出颜色缓冲区和深度缓冲区都支持的采样数（MSAA级别）
 	VkPhysicalDeviceProperties gpu_properties;
 	vkGetPhysicalDeviceProperties(get_device().get_gpu().get_handle(), &gpu_properties);
 
+	// 颜色和深度同时支持的采样点个数
 	VkSampleCountFlags supported_by_depth_and_color = gpu_properties.limits.framebufferColorSampleCounts & gpu_properties.limits.framebufferDepthSampleCounts;
 
 	// All possible sample counts are listed here from most to least preferred as default
@@ -732,6 +756,7 @@ void MSAASample::prepare_supported_sample_count_list()
 
 void MSAASample::prepare_depth_resolve_mode_list()
 {
+	// 找出gpu支持的所有深度/模板解析模式，并按优先级设置最佳默认值
 	if (get_instance().is_enabled(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
 	{
 		VkPhysicalDeviceProperties2KHR gpu_properties{};
@@ -743,6 +768,7 @@ void MSAASample::prepare_depth_resolve_mode_list()
 
 		if (depth_resolve_properties.supportedDepthResolveModes == 0)
 		{
+			// 不支持深度解析
 			LOGW("No depth stencil resolve modes supported");
 			depth_writeback_resolve_supported = false;
 		}

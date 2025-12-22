@@ -479,6 +479,7 @@ void TextureLoading::draw()
 
 void TextureLoading::generate_quad()
 {
+	// 生成一个quad的顶点缓存和索引缓存
 	// Setup vertices for a single uv-mapped quad made from two triangles
 	std::vector<TextureLoadingVertexStructure> vertices =
 	    {
@@ -598,6 +599,7 @@ void TextureLoading::setup_descriptor_set()
 
 void TextureLoading::prepare_pipelines()
 {
+	// 创建pipeline
 	VkPipelineInputAssemblyStateCreateInfo input_assembly_state =
 	    vkb::initializers::pipeline_input_assembly_state_create_info(
 	        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
@@ -702,9 +704,13 @@ void TextureLoading::prepare_uniform_buffers()
 void TextureLoading::update_uniform_buffers()
 {
 	// Vertex shader
+	// 投影矩阵
 	ubo_vs.projection     = glm::perspective(glm::radians(60.0f), static_cast<float>(width) / static_cast<float>(height), 0.001f, 256.0f);
+
+	// 视图矩阵
 	glm::mat4 view_matrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, zoom));
 
+	// 模型矩阵
 	ubo_vs.model = view_matrix * glm::translate(glm::mat4(1.0f), camera_pos);
 	ubo_vs.model = glm::rotate(ubo_vs.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
 	ubo_vs.model = glm::rotate(ubo_vs.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));

@@ -33,6 +33,8 @@ namespace core
 */
 class SampledImage
 {
+	// 同时包含图像视图和采样器
+	// 可能对图像视图，input attachment或者render target进行采样
   public:
 	/**
 	* @brief Constructs a SampledImage referencing the given image and with the given sampler.
@@ -45,6 +47,7 @@ class SampledImage
 	* @remarks If the render target is null, the default is assumed.
 	*          If the sampler is null, a default sampler is used.
 	*/
+	// 这个应该是设置input attachment的采样器？
 	SampledImage(uint32_t target_attachment, RenderTarget *render_target = nullptr, Sampler *sampler = nullptr, bool isDepthResolve = false);
 
 	SampledImage(const SampledImage &to_copy);

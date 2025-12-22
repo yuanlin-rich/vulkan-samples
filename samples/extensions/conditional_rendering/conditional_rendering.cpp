@@ -26,6 +26,8 @@
 #include "scene_graph/components/pbr_material.h"
 #include "scene_graph/components/sub_mesh.h"
 
+// 基于gpu上的条件值来跳过渲染命令的执行，类似于cpu上的if语句，但完全在gpu上执行
+
 ConditionalRendering::ConditionalRendering()
 {
 	title = "Conditional rendering";

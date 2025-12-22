@@ -25,6 +25,7 @@ static constexpr uint32_t INVALID_IMAGE_INDEX = std::numeric_limits<uint32_t>::m
 
 void SwapchainRecreation::get_queue()
 {
+	// 获取图形队列，如果不支持present，抛出异常
 	queue = &get_device().get_queue_by_flags(VK_QUEUE_GRAPHICS_BIT, 0);
 
 	// Make sure presentation is supported on this queue.  This is practically always the case;
@@ -61,8 +62,12 @@ void SwapchainRecreation::query_present_modes()
  */
 void SwapchainRecreation::query_compatible_present_modes(VkPresentModeKHR present_mode)
 {
+	// 检查与指定显示模式（Present Mode）兼容的其他显示模式
 	// If manually overriden, or if VK_EXT_surface_maintenance1 is not supported, assume no
 	// compatible present modes.
+	// 查询显示模式兼容性 - 核心功能
+	// 动态修改交换链属性 - 无需重建
+	// 获取更多表面信息 - 一次性查询多种能力
 	if (!has_maintenance1 || recreate_swapchain_on_present_mode_change)
 	{
 		compatible_modes.resize(1);
@@ -73,18 +78,22 @@ void SwapchainRecreation::query_compatible_present_modes(VkPresentModeKHR presen
 	VkPhysicalDeviceSurfaceInfo2KHR surface_info{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR};
 	surface_info.surface = get_surface();
 
+	// 注意这里将用户指定的显示模式作为输入
 	VkSurfacePresentModeEXT surface_present_mode{VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_EXT};
 	surface_present_mode.presentMode = present_mode;
 	surface_info.pNext               = &surface_present_mode;
 
 	VkSurfaceCapabilities2KHR surface_caps{VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR};
 
+	// 注意这里surface_caps.pNext是我们要查询的字段
 	VkSurfacePresentModeCompatibilityEXT modes{VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_EXT};
 	modes.presentModeCount = 0;
 	surface_caps.pNext     = &modes;
 
+	// 第一次查询，获取兼容的present模式个数
 	VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilities2KHR(get_gpu_handle(), &surface_info, &surface_caps));
 
+	// 第二次查询，真正获取兼容的present模式
 	compatible_modes.resize(modes.presentModeCount);
 	modes.pPresentModes = compatible_modes.data();
 	VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilities2KHR(get_gpu_handle(), &surface_info, &surface_caps));
@@ -239,11 +248,13 @@ void SwapchainRecreation::init_swapchain()
 	{
 		// When VK_EXT_swapchain_maintenance1 is available, you can optionally amortize the
 		// cost of swapchain image allocations over multiple frames.
+		// 延迟内存分配：分摊交换链图像内存分配的开销
 		info.flags |= VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT;
 
 		// If there are multiple present modes that are compatible, give that list to create
 		// info.  When switching present modes between compatible ones, swapchain doesn't
 		// need to be recreated.
+		// 多兼容显示模式：允许运行时在不重建交换链的情况下切换显示模式
 		if (compatible_modes.size() > 1)
 		{
 			compatible_modes_info.presentModeCount = static_cast<uint32_t>(compatible_modes.size());

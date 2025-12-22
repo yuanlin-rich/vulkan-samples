@@ -96,6 +96,8 @@ void RenderPipeline::draw(vkb::core::CommandBufferC &command_buffer, RenderTarge
 		clear_value.push_back({0.0f, 0.0f, 0.0f, 1.0f});
 	}
 
+	// 这里是绘制的重点，在这里，command buffer内部会创建所有渲染需要的资源
+	// render frame，render pass等
 	for (size_t i = 0; i < subpasses.size(); ++i)
 	{
 		active_subpass_index = i;

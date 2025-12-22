@@ -151,6 +151,8 @@ namespace core
 namespace
 {
 #ifdef USE_VALIDATION_LAYERS
+// VK_EXT_debug_utils的回调
+// 更精细，包含严重级别、消息类型，并支持调试标签
 inline VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_utils_messenger_callback(vk::DebugUtilsMessageSeverityFlagBitsEXT      message_severity,
                                                                        vk::DebugUtilsMessageTypeFlagsEXT             message_type,
                                                                        vk::DebugUtilsMessengerCallbackDataEXT const *callback_data,
@@ -168,6 +170,8 @@ inline VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_utils_messenger_callback(vk::Debug
 	return false;
 }
 
+// VK_EXT_debug_report的回调
+// 相对简单，基于位掩码的严重级别
 inline VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_callback(vk::DebugReportFlagsEXT flags,
                                                        vk::DebugReportObjectTypeEXT /*type*/,
                                                        uint64_t /*object*/,
@@ -197,6 +201,7 @@ inline VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_callback(vk::DebugReportFlagsEXT f
 }
 #endif
 
+// 启用扩展（如果可用）
 inline bool enable_extension(char const                                 *requested_extension,
                              std::vector<vk::ExtensionProperties> const &available_extensions,
                              std::vector<char const *>                  &enabled_extensions)
@@ -221,6 +226,7 @@ inline bool enable_extension(char const                                 *request
 	return is_available;
 }
 
+// 启用层（如果可用）
 inline bool enable_layer(char const *requested_layer, std::vector<vk::LayerProperties> const &available_layers, std::vector<char const *> &enabled_layers)
 {
 	bool is_available = std::ranges::any_of(
@@ -243,6 +249,7 @@ inline bool enable_layer(char const *requested_layer, std::vector<vk::LayerPrope
 	return is_available;
 }
 
+// 启用层设置（如果可用）
 inline bool enable_layer_setting(vk::LayerSettingEXT const        &requested_layer_setting,
                                  std::vector<char const *> const  &enabled_layers,
                                  std::vector<vk::LayerSettingEXT> &enabled_layer_settings)
@@ -337,14 +344,18 @@ inline Instance<bindingType>::Instance(std::string const                        
 
 #if (defined(VKB_ENABLE_PORTABILITY))
 	enable_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, available_instance_extensions, enabled_extensions);
+
+	// vulkan的便携式实现，在不支持vulkan的平台上使用vulkan需要启用此实现
 	bool portability_enumeration_available = enable_extension(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME, available_instance_extensions, enabled_extensions);
 #endif
 
 #ifdef USE_VALIDATION_LAYERS
+	// VK_LAYER_KHRONOS_validation，聚合了多个验证层，提供全面的验证功能
 	const char *validation_layer_name = "VK_LAYER_KHRONOS_validation";
 #	ifdef USE_VALIDATION_LAYER_FEATURES
 	bool validation_features = false;
 	{
+		// VK_EXT_LAYER_SETTINGS_EXTENSION_NAME，提供一种程序化的方式来配置验证层和其他层的设置
 		std::vector<vk::ExtensionProperties> available_layer_instance_extensions = vk::enumerateInstanceExtensionProperties(std::string(validation_layer_name));
 		validation_features                                                      = enable_extension(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME, available_layer_instance_extensions, enabled_extensions);
 	}
@@ -355,12 +366,21 @@ inline Instance<bindingType>::Instance(std::string const                        
 	// They are already added to requested_extensions by VulkanSample::prepare
 
 	// Even for a headless surface a swapchain is still required
+	// 在vulkan和本地窗口系统之间建立桥梁，使得渲染结果能够显示在屏幕上。
 	enable_extension(VK_KHR_SURFACE_EXTENSION_NAME, available_instance_extensions, enabled_extensions);
 
 	// VK_KHR_get_physical_device_properties2 is a prerequisite of VK_KHR_performance_query
 	// which will be used for stats gathering where available.
+	// VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME，提供了一个可扩展的机制来查询物理设备的属性、功能（features）和格式属性
+	// vkGetPhysicalDeviceProperties2KHR - 替代 vkGetPhysicalDeviceProperties
+	// vkGetPhysicalDeviceFeatures2KHR - 替代 vkGetPhysicalDeviceFeatures
+	// vkGetPhysicalDeviceFormatProperties2KHR - 替代 vkGetPhysicalDeviceFormatProperties
+	// vkGetPhysicalDeviceImageFormatProperties2KHR - 替代 vkGetPhysicalDeviceImageFormatProperties
+	// 这些新函数的核心特点是，它们接受一个 pNext 指针作为参数。这个指针允许你将多个结构体链接在一起，形成一个链表。
 	enable_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, available_instance_extensions, enabled_extensions);
 
+	// 开启所有申请的拓展
+	// 如果必需的拓展不存在，则抛出异常
 	for (auto requested_extension : requested_extensions)
 	{
 		auto const &extension_name        = requested_extension.first;
@@ -384,6 +404,7 @@ inline Instance<bindingType>::Instance(std::string const                        
 	std::vector<char const *> enabled_layers;
 
 	auto layer_error = false;
+	// 开启所有申请的层，如果必需的层不存在，则抛出异常
 	for (auto const &requested_layer : requested_layers)
 	{
 		auto const &layer_name        = requested_layer.first;
@@ -403,6 +424,7 @@ inline Instance<bindingType>::Instance(std::string const                        
 	}
 
 #ifdef USE_VALIDATION_LAYERS
+	// 启用验证层
 	// NOTE: It's important to have the validation layer as the last one here!!!!
 	//			 Otherwise, device creation fails !?!
 	enable_layer(validation_layer_name, supported_layers, enabled_layers);
@@ -424,6 +446,7 @@ inline Instance<bindingType>::Instance(std::string const                        
 	}
 
 #ifdef USE_VALIDATION_LAYERS
+	// 调试回调
 	vk::DebugUtilsMessengerCreateInfoEXT debug_utils_create_info;
 	vk::DebugReportCallbackCreateInfoEXT debug_report_create_info;
 	if (has_debug_utils)
@@ -446,6 +469,7 @@ inline Instance<bindingType>::Instance(std::string const                        
 #endif
 
 #if (defined(VKB_ENABLE_PORTABILITY))
+	// vulkan的便携式实现，在不支持vulkan的平台上使用vulkan需要启用此实现
 	if (portability_enumeration_available)
 	{
 		instance_info.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
@@ -460,6 +484,8 @@ inline Instance<bindingType>::Instance(std::string const                        
 	const vk::Bool32 setting_validate_gpuav = true;
 	if (validation_features)
 	{
+		// 开启gpu辅助验证，进行着色器验证（越界，无效访问等），描述符索引验证（索引越界等），获取更详细的调试信息(提供具体的着色器代码位置，显示访问的资源和索引值，比通用"无效内存访问"错误更有用)
+		// 总之能获取cpu端难以发现的错误
 		enable_layer_setting(vk::LayerSettingEXT(validation_layer_name, "gpuav_enable", vk::LayerSettingTypeEXT::eBool32, 1, &setting_validate_gpuav), enabled_layers, enabled_layer_settings);
 	}
 #	endif
@@ -472,22 +498,31 @@ inline Instance<bindingType>::Instance(std::string const                        
 	const vk::Bool32 setting_validate_best_practices_nvidia = true;
 	if (validation_features)
 	{
+		// 检查通用平台的vulkan最佳实践
 		enable_layer_setting(
 		    vk::LayerSettingEXT(validation_layer_name, "validate_best_practices", vk::LayerSettingTypeEXT::eBool32, 1, &setting_validate_best_practices),
 		    enabled_layers,
 		    enabled_layer_settings);
+
+		// 检查arm平台的vulkan最佳实践
 		enable_layer_setting(
 		    vk::LayerSettingEXT(validation_layer_name, "validate_best_practices_arm", vk::LayerSettingTypeEXT::eBool32, 1, &setting_validate_best_practices_arm),
 		    enabled_layers,
 		    enabled_layer_settings);
+
+		// 检查amd平台的vulkan最佳实践
 		enable_layer_setting(
 		    vk::LayerSettingEXT(validation_layer_name, "validate_best_practices_amd", vk::LayerSettingTypeEXT::eBool32, 1, &setting_validate_best_practices_amd),
 		    enabled_layers,
 		    enabled_layer_settings);
+
+		// 检查img平台的vulkan最佳实践
 		enable_layer_setting(
 		    vk::LayerSettingEXT(validation_layer_name, "validate_best_practices_img", vk::LayerSettingTypeEXT::eBool32, 1, &setting_validate_best_practices_img),
 		    enabled_layers,
 		    enabled_layer_settings);
+
+		// 检查nvidia平台的vulkan最佳实践
 		enable_layer_setting(
 		    vk::LayerSettingEXT(
 		        validation_layer_name, "validate_best_practices_nvidia", vk::LayerSettingTypeEXT::eBool32, 1, &setting_validate_best_practices_nvidia),
@@ -501,9 +536,12 @@ inline Instance<bindingType>::Instance(std::string const                        
 	const vk::Bool32 setting_validate_sync_heuristics = true;
 	if (validation_features)
 	{
+		// 启用同步验证，检测命令缓冲区中的潜在同步问题，如读写冲突、资源访问冲突等
 		enable_layer_setting(vk::LayerSettingEXT(validation_layer_name, "validate_sync", vk::LayerSettingTypeEXT::eBool32, 1, &setting_validate_sync),
 		                     enabled_layers,
 		                     enabled_layer_settings);
+
+		// 启用同步验证启发式，可以检测出shader中的潜在同步问题
 		enable_layer_setting(
 		    vk::LayerSettingEXT(
 		        validation_layer_name, "syncval_shader_accesses_heuristic", vk::LayerSettingTypeEXT::eBool32, 1, &setting_validate_sync_heuristics),
@@ -534,6 +572,7 @@ inline Instance<bindingType>::Instance(std::string const                        
 	volkLoadInstance(handle);
 
 #ifdef USE_VALIDATION_LAYERS
+	// 创建调试回调
 	if (has_debug_utils)
 	{
 		debug_utils_messenger = handle.createDebugUtilsMessengerEXT(debug_utils_create_info);
@@ -696,6 +735,7 @@ inline PhysicalDevice<bindingType> &Instance<bindingType>::get_suitable_gpu(Surf
 			                                                        });
 		                             });
 #else
+		// 检查物理设备上的某个队列族是否支持与特定表面进行呈现操作
 		gpuIt = std::ranges::find_if(gpus,
 		                             [&surface](auto const &gpu) {
 			                             auto gpu_supports_surface = [&gpu, &surface]() {

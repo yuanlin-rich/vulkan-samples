@@ -59,6 +59,7 @@ void TextureMipMapGeneration::request_gpu_features(vkb::core::PhysicalDeviceC &g
 */
 void TextureMipMapGeneration::load_texture_generate_mipmaps(std::string file_name)
 {
+	// 生成mipmap，大部分纹理都是以srgb格式存储
 	// ktx1 doesn't know whether the content is sRGB or linear, but most tools save in sRGB, so assume that.
 	VkFormat format = VK_FORMAT_R8G8B8A8_SRGB;
 
@@ -76,6 +77,8 @@ void TextureMipMapGeneration::load_texture_generate_mipmaps(std::string file_nam
 	texture.height = ktx_texture->baseHeight;
 	// Calculate number of mip levels as per Vulkan specs:
 	// numLevels = 1 + floor(log2(max(w, h, d)))
+
+	// 计算mipmap层数
 	texture.mip_levels = static_cast<uint32_t>(floor(log2(std::max(texture.width, texture.height))) + 1);
 
 	// Get device properties for the requested texture format
@@ -83,6 +86,8 @@ void TextureMipMapGeneration::load_texture_generate_mipmaps(std::string file_nam
 	// If this is not supported you could implement a fallback via compute shader image writes and stores
 	VkFormatProperties formatProperties;
 	vkGetPhysicalDeviceFormatProperties(get_device().get_gpu().get_handle(), format, &formatProperties);
+
+	// 判断tiling格式的图像，是否支持作为拷贝的源和目标
 	if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) || !(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT))
 	{
 		throw std::runtime_error("Selected image format does not support blit source and destination");
@@ -149,6 +154,7 @@ void TextureMipMapGeneration::load_texture_generate_mipmaps(std::string file_nam
 	vkb::image_layout_transition(copy_command, texture.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
 	// Copy the first mip of the chain, remaining mips will be generated
+	// mipmap的第一层数据，来源自stage buffer，其他层的数据，来源自第一层
 	VkBufferImageCopy buffer_copy_region               = {};
 	buffer_copy_region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
 	buffer_copy_region.imageSubresource.mipLevel       = 0;
@@ -160,6 +166,7 @@ void TextureMipMapGeneration::load_texture_generate_mipmaps(std::string file_nam
 	vkCmdCopyBufferToImage(copy_command, staging_buffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &buffer_copy_region);
 
 	// Transition first mip level to transfer source so we can blit(read) from it
+	// 图像布局变换，第一层图像从拷贝目标转为拷贝源头
 	vkb::image_layout_transition(copy_command, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
 	get_device().flush_command_buffer(copy_command, queue, true);
@@ -196,6 +203,7 @@ void TextureMipMapGeneration::load_texture_generate_mipmaps(std::string file_nam
 		image_blit.dstOffsets[1].z           = 1;
 
 		// Prepare current mip level as image blit destination
+		// 当前层转为拷贝目标格式
 		vkb::image_layout_transition(blit_command,
 		                             texture.image,
 		                             VK_IMAGE_LAYOUT_UNDEFINED,
@@ -203,6 +211,7 @@ void TextureMipMapGeneration::load_texture_generate_mipmaps(std::string file_nam
 		                             {VK_IMAGE_ASPECT_COLOR_BIT, i, 1, 0, 1});
 
 		// Blit from previous level
+		// 从前一个层拷贝图像
 		vkCmdBlitImage(
 		    blit_command,
 		    texture.image,
@@ -214,6 +223,7 @@ void TextureMipMapGeneration::load_texture_generate_mipmaps(std::string file_nam
 		    VK_FILTER_LINEAR);
 
 		// Prepare current mip level as image blit source for next level
+		// 当前层转为拷贝源格式
 		vkb::image_layout_transition(blit_command,
 		                             texture.image,
 		                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -222,6 +232,7 @@ void TextureMipMapGeneration::load_texture_generate_mipmaps(std::string file_nam
 	}
 
 	// After the loop, all mip layers are in TRANSFER_SRC layout, so transition all to SHADER_READ
+	// 所有的层转为shader read only格式，用于后续着色器访问
 	vkb::image_layout_transition(blit_command,
 	                             texture.image,
 	                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,

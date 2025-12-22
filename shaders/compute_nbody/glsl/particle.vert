@@ -16,6 +16,8 @@
  * limitations under the License.
  */
 
+// 将粒子数据转换为适合渲染的点精灵（point sprites），并计算基于透视的正确点大小
+
 layout (location = 0) in vec4 inPos;
 layout (location = 1) in vec4 inVel;
 
@@ -39,7 +41,11 @@ void main ()
 	const float spriteSize = 0.005 * inPos.w; // Point size influenced by mass (stored in inPos.w);
 
 	vec4 eyePos = ubo.modelview * vec4(inPos.x, inPos.y, inPos.z, 1.0); 
+
+	// 计算点精灵一个角在投影后的位置
 	vec4 projectedCorner = ubo.projection * vec4(0.5 * spriteSize, 0.5 * spriteSize, eyePos.z, eyePos.w);
+
+	// 将投影后的尺寸转换为像素大小
 	gl_PointSize = clamp(ubo.screendim.x * projectedCorner.x / projectedCorner.w, 1.0, 128.0);
 	
 	gl_Position = ubo.projection * eyePos;

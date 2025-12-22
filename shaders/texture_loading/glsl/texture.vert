@@ -41,17 +41,29 @@ out gl_PerVertex
 
 void main() 
 {
+	// 纹理坐标
 	outUV = inUV;
+
+	// lod偏移量
 	outLodBias = ubo.lodBias;
 
+	// 世界位置，但是vec3版本
 	vec3 worldPos = vec3(ubo.model * vec4(inPos, 1.0));
 
+	// 投影之后的位置
 	gl_Position = ubo.projection * ubo.model * vec4(inPos.xyz, 1.0);
 
+	// 世界位置，但是vec4版本
     vec4 pos = ubo.model * vec4(inPos, 1.0);
+
+	// 切线空间法线到世界空间的转换，outNormal可以和世界空间的光源做光照计算
 	outNormal = mat3(inverse(transpose(ubo.model))) * inNormal;
+
+	// 这里的光源是错误的，虽然输出了光源的方向
 	vec3 lightPos = vec3(0.0);
 	vec3 lPos = mat3(ubo.model) * lightPos.xyz;
     outLightVec = lPos - pos.xyz;
+
+	// 视角方向
     outViewVec = ubo.viewPos.xyz - pos.xyz;		
 }
