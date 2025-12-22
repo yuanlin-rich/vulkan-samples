@@ -37,6 +37,10 @@ class Sampler;
  *
  * This will be referenced by a buffer info or image info descriptor inside a descriptor set.
  */
+// 绑定的资源信息
+// 1）缓冲区，可能包括便宜和范围
+// 2）图像视图
+// 3）采样器
 struct ResourceInfo
 {
 	bool dirty{false};
@@ -58,8 +62,10 @@ struct ResourceInfo
  *
  * The ResourceSet has a one to one mapping with a DescriptorSet.
  */
+
 class ResourceSet
 {
+	// 资源绑定信息
   public:
 	void reset();
 
@@ -82,6 +88,9 @@ class ResourceSet
   private:
 	bool dirty{false};
 
+	// 绑定表
+	// 第一层索引，绑定点->数组
+	// 第二层索引，数组索引->真正的绑定资源的信息
 	BindingMap<ResourceInfo> resource_bindings;
 };
 

@@ -63,6 +63,7 @@ class ImageView : public vkb::core::VulkanResourceC<VkImageView>
 
 	VkFormat format{};
 
+	// image view引用的图像资源范围
 	VkImageSubresourceRange subresource_range{};
 };
 }        // namespace core

@@ -40,6 +40,7 @@ class CommandBuffer;
 
 namespace rendering
 {
+// 灯光信息，位置，颜色，方向，范围，（聚光灯）衰减角度
 struct alignas(16) Light
 {
 	glm::vec4 position;         // position.w represents type of light
@@ -48,6 +49,8 @@ struct alignas(16) Light
 	glm::vec2 info;             // (only used for spot lights) info.x represents light inner cone angle, info.y represents light outer cone angle
 };
 
+// 光与暗信息，方向光，点光与暗，聚光灯列表
+// light_buffer是做什么的？
 template <vkb::BindingType bindingType>
 struct LightingState
 {
@@ -88,6 +91,7 @@ class Subpass
 	using RenderTargetType = typename std::conditional<bindingType == vkb::BindingType::Cpp, vkb::rendering::HPPRenderTarget, vkb::RenderTarget>::type;
 
   public:
+	// 创建subpass需要render context，vertex shader以及fragment shader
 	Subpass(vkb::rendering::RenderContext<bindingType> &render_context, ShaderSource &&vertex_shader, ShaderSource &&fragment_shader);
 
 	Subpass(const Subpass &)            = delete;
@@ -114,6 +118,7 @@ class Subpass
 	 * @param scene_lights All of the light components from the scene graph
 	 * @param max_lights_per_type The maximum amount of lights allowed for any given type of light.
 	 */
+	// 申请光源
 	template <typename T>
 	void allocate_lights(const std::vector<sg::Light *> &scene_lights,
 	                     size_t                          max_lights_per_type);
@@ -121,6 +126,7 @@ class Subpass
 	const std::vector<uint32_t>                               &get_color_resolve_attachments() const;
 	const std::string                                         &get_debug_name() const;
 	const uint32_t                                            &get_depth_stencil_resolve_attachment() const;
+	// ResolveModeFlagBitsType，处理多重采样抗锯齿（MSAA）时，将多个样本解析为单个像素值的方式
 	ResolveModeFlagBitsType                                    get_depth_stencil_resolve_mode() const;
 	DepthStencilStateType                                     &get_depth_stencil_state();
 	const bool                                                &get_disable_depth_stencil_attachment() const;
@@ -159,6 +165,7 @@ class Subpass
 	 *        of the multisampled depth attachment will be enabled,
 	 *        with this mode, to depth_stencil_resolve_attachment
 	 */
+	// ResolveModeFlagBitsType，处理多重采样抗锯齿（MSAA）时，将多个样本解析为单个像素值的方式
 	vk::ResolveModeFlagBits depth_stencil_resolve_mode{vk::ResolveModeFlagBits::eNone};
 
 	vkb::rendering::HPPDepthStencilState depth_stencil_state{};
@@ -197,6 +204,7 @@ using SubpassCpp = Subpass<vkb::BindingType::Cpp>;
 
 inline glm::mat4 vulkan_style_projection(const glm::mat4 &proj)
 {
+	// vulkan中需要反转y轴
 	// Flip Y in clipspace. X = -1, Y = -1 is topLeft in Vulkan.
 	glm::mat4 mat = proj;
 	mat[1][1] *= -1;
@@ -214,12 +222,14 @@ inline Subpass<bindingType>::Subpass(vkb::rendering::RenderContext<bindingType> 
 {
 }
 
+// input attachments
 template <vkb::BindingType bindingType>
 inline const std::vector<uint32_t> &Subpass<bindingType>::get_input_attachments() const
 {
 	return input_attachments;
 }
 
+// 光源
 template <vkb::BindingType bindingType>
 inline LightingState<bindingType> &Subpass<bindingType>::get_lighting_state()
 {
@@ -233,6 +243,7 @@ inline LightingState<bindingType> &Subpass<bindingType>::get_lighting_state()
 	}
 }
 
+// output attachments，其实就是color attachments
 template <vkb::BindingType bindingType>
 inline const std::vector<uint32_t> &Subpass<bindingType>::get_output_attachments() const
 {
@@ -252,12 +263,15 @@ inline typename vkb::rendering::RenderContext<bindingType> &Subpass<bindingType>
 	}
 }
 
+// 资源的使用模式（静态，动态，绑定后更新）
 template <vkb::BindingType bindingType>
 std::unordered_map<std::string, ShaderResourceMode> const &Subpass<bindingType>::get_resource_mode_map() const
 {
 	return resource_mode_map;
 }
 
+// 采样数量
+// 为什么这里有个采样数量，采样数量不是应该在attachment中么
 template <vkb::BindingType bindingType>
 inline typename Subpass<bindingType>::SampleCountflagBitsType Subpass<bindingType>::get_sample_count() const
 {
@@ -277,6 +291,8 @@ inline const ShaderSource &Subpass<bindingType>::get_vertex_shader() const
 	return vertex_shader;
 }
 
+// 根据场景光源，申请光源
+// 每一种光源数量不能超过max_lights_per_type
 template <vkb::BindingType bindingType>
 template <typename T>
 void Subpass<bindingType>::allocate_lights(const std::vector<sg::Light *> &scene_lights,
@@ -351,6 +367,7 @@ void Subpass<bindingType>::allocate_lights(const std::vector<sg::Light *> &scene
 	lighting_state.light_buffer.update(light_info);
 }
 
+// 解析颜色附件，为什么要和深度的附件分开？
 template <vkb::BindingType bindingType>
 inline const std::vector<uint32_t> &Subpass<bindingType>::get_color_resolve_attachments() const
 {
@@ -363,6 +380,7 @@ inline const std::string &Subpass<bindingType>::get_debug_name() const
 	return debug_name;
 }
 
+// 解析深度附件，为什么要和颜色附件分开？
 template <vkb::BindingType bindingType>
 inline const uint32_t &Subpass<bindingType>::get_depth_stencil_resolve_attachment() const
 {

@@ -38,6 +38,8 @@ namespace vkb
  */
 class RenderPipeline
 {
+	// 渲染流水线，包含多个subpass
+	// 似乎有潜力改成render graph？
   public:
 	RenderPipeline(std::vector<std::unique_ptr<vkb::rendering::SubpassC>> &&subpasses = {});
 
@@ -59,6 +61,7 @@ class RenderPipeline
 	/**
 	 * @return Load store info
 	 */
+	// load store info，每个subpass都会有
 	const std::vector<LoadStoreInfo> &get_load_store() const;
 
 	/**
@@ -69,6 +72,7 @@ class RenderPipeline
 	/**
 	 * @return Clear values
 	 */
+	// clear color，每个render pass都会有
 	const std::vector<VkClearValue> &get_clear_value() const;
 
 	/**
@@ -87,6 +91,7 @@ class RenderPipeline
 	/**
 	 * @brief Record draw commands for each Subpass
 	 */
+	// 这里就明白了为什么只有一个render target，这里的render target实际上是多个attachments的集合
 	void draw(vkb::core::CommandBufferC &command_buffer, RenderTarget &render_target, VkSubpassContents contents = VK_SUBPASS_CONTENTS_INLINE);
 
 	/**

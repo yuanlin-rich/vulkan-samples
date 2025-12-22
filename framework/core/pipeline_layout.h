@@ -29,6 +29,7 @@ class DescriptorSetLayout;
 
 class PipelineLayout
 {
+	// 流水线布局
   public:
 	PipelineLayout(vkb::core::DeviceC &device, const std::vector<ShaderModule *> &shader_modules);
 
@@ -68,6 +69,7 @@ class PipelineLayout
 	std::unordered_map<std::string, ShaderResource> shader_resources;
 
 	// A map of each set and the resources it owns used by the pipeline layout
+	// set index和set之间的对应关系
 	std::unordered_map<uint32_t, std::vector<ShaderResource>> shader_sets;
 
 	// The different descriptor set layouts for this pipeline layout

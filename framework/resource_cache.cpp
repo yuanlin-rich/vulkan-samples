@@ -24,6 +24,8 @@ namespace vkb
 {
 namespace
 {
+
+// 申请gpu资源的模板函数，根据resources的类型决定具体申请什么资源
 template <class T, class... A>
 T &request_resource(vkb::core::DeviceC &device, ResourceRecord &recorder, std::mutex &resource_mutex, std::unordered_map<std::size_t, T> &resources, A &...args)
 {
@@ -75,11 +77,13 @@ DescriptorSetLayout &ResourceCache::request_descriptor_set_layout(const uint32_t
 	return request_resource(device, recorder, descriptor_set_layout_mutex, state.descriptor_set_layouts, set_index, shader_modules, set_resources);
 }
 
+// 申请图形管线
 GraphicsPipeline &ResourceCache::request_graphics_pipeline(PipelineState &pipeline_state)
 {
 	return request_resource(device, recorder, graphics_pipeline_mutex, state.graphics_pipelines, pipeline_cache, pipeline_state);
 }
 
+// 申请计算管线
 ComputePipeline &ResourceCache::request_compute_pipeline(PipelineState &pipeline_state)
 {
 	return request_resource(device, recorder, compute_pipeline_mutex, state.compute_pipelines, pipeline_cache, pipeline_state);

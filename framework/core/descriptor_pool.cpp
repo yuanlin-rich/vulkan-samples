@@ -28,11 +28,15 @@ DescriptorPool::DescriptorPool(vkb::core::DeviceC        &device,
     device{device},
     descriptor_set_layout{&descriptor_set_layout}
 {
+	// 这段代码根据给定的描述符集布局，计算出：
+	// 每种描述符类型需要多少个描述符
+	// 总共需要创建多少个描述符集
 	const auto &bindings = descriptor_set_layout.get_bindings();
 
 	std::map<VkDescriptorType, std::uint32_t> descriptor_type_counts;
 
 	// Count each type of descriptor set
+	// 统计每种描述符类型的数量
 	for (auto &binding : bindings)
 	{
 		descriptor_type_counts[binding.descriptorType] += binding.descriptorCount;
@@ -44,6 +48,7 @@ DescriptorPool::DescriptorPool(vkb::core::DeviceC        &device,
 	auto pool_size_it = pool_sizes.begin();
 
 	// Fill pool size for each descriptor type count multiplied by the pool size
+	// 计算池大小数组
 	for (auto &it : descriptor_type_counts)
 	{
 		pool_size_it->type = it.first;
@@ -53,6 +58,7 @@ DescriptorPool::DescriptorPool(vkb::core::DeviceC        &device,
 		++pool_size_it;
 	}
 
+	// 设置最大描述符集数量
 	pool_max_sets = pool_size;
 }
 
@@ -94,9 +100,11 @@ void DescriptorPool::set_descriptor_set_layout(const DescriptorSetLayout &set_la
 
 VkDescriptorSet DescriptorPool::allocate()
 {
+	// 查找descriptor set
 	pool_index = find_available_pool(pool_index);
 
 	// Increment allocated set count for the current pool
+	// 增加记录的已经分配的descriptor set数量
 	++pool_sets_count[pool_index];
 
 	VkDescriptorSetLayout set_layout = get_descriptor_set_layout().get_handle();
@@ -109,6 +117,7 @@ VkDescriptorSet DescriptorPool::allocate()
 	VkDescriptorSet handle = VK_NULL_HANDLE;
 
 	// Allocate a new descriptor set from the current pool
+	// 分配descritpor set
 	auto result = vkAllocateDescriptorSets(device.get_handle(), &alloc_info, &handle);
 
 	if (result != VK_SUCCESS)
@@ -120,6 +129,7 @@ VkDescriptorSet DescriptorPool::allocate()
 	}
 
 	// Store mapping between the descriptor set and the pool
+	// 能从descriptor set找到对应的descriptor pool
 	set_pool_mapping.emplace(handle, pool_index);
 
 	return handle;
@@ -157,6 +167,7 @@ std::uint32_t DescriptorPool::find_available_pool(std::uint32_t search_index)
 	// Create a new pool
 	if (pools.size() <= search_index)
 	{
+		// 创建新的描述符池
 		VkDescriptorPoolCreateInfo create_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 
 		create_info.poolSizeCount = to_u32(pool_sizes.size());
@@ -170,6 +181,8 @@ std::uint32_t DescriptorPool::find_available_pool(std::uint32_t search_index)
 		auto &binding_flags = descriptor_set_layout->get_binding_flags();
 		for (auto binding_flag : binding_flags)
 		{
+			// 如果descriptor_set_layout某个绑定点支持绑定后更新
+			// 则descriptor pool也要支持绑定后更新
 			if (binding_flag & VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT)
 			{
 				create_info.flags |= VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT_EXT;
@@ -196,6 +209,7 @@ std::uint32_t DescriptorPool::find_available_pool(std::uint32_t search_index)
 	}
 	else if (pool_sets_count[search_index] < pool_max_sets)
 	{
+		// 当前描述符池还能继续分配
 		return search_index;
 	}
 

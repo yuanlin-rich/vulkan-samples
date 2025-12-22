@@ -39,6 +39,8 @@ Attachment::Attachment(VkFormat format, VkSampleCountFlagBits samples, VkImageUs
 {
 }
 const RenderTarget::CreateFunc RenderTarget::DEFAULT_CREATE_FUNC = [](core::Image &&swapchain_image) -> std::unique_ptr<RenderTarget> {
+	// 默认的创建渲染目标的函数
+	// 输入从swap chain中获取的图像，同时创建一张图像作为深度模板缓存
 	VkFormat depth_format = get_suitable_depth_format(swapchain_image.get_device().get_gpu().get_handle());
 
 	core::Image depth_image{swapchain_image.get_device(), swapchain_image.get_extent(),
@@ -57,6 +59,7 @@ vkb::RenderTarget::RenderTarget(std::vector<core::Image> &&images) :
     device{images.back().get_device()},
     images{std::move(images)}
 {
+	// 根据传入的image创建渲染目标，至少一张图像
 	assert(!this->images.empty() && "Should specify at least 1 image");
 
 	std::set<VkExtent2D, CompareExtent2D> unique_extent;
@@ -68,6 +71,7 @@ vkb::RenderTarget::RenderTarget(std::vector<core::Image> &&images) :
 	std::transform(this->images.begin(), this->images.end(), std::inserter(unique_extent, unique_extent.end()), get_image_extent);
 
 	// Allow only one extent size for a render target
+	// 所有的图像必须宽度高度相同
 	if (unique_extent.size() != 1)
 	{
 		throw VulkanException{VK_ERROR_INITIALIZATION_FAILED, "Extent size is not unique"};
@@ -77,13 +81,16 @@ vkb::RenderTarget::RenderTarget(std::vector<core::Image> &&images) :
 
 	for (auto &image : this->images)
 	{
+		// 只支持2d图像
 		if (image.get_type() != VK_IMAGE_TYPE_2D)
 		{
 			throw VulkanException{VK_ERROR_INITIALIZATION_FAILED, "Image type is not 2D"};
 		}
 
+		// 根据图像创建图像视图，不额外制定参数的话，图像视图的格式等和图像保持一致
 		views.emplace_back(image, VK_IMAGE_VIEW_TYPE_2D);
 
+		// 创建attachments
 		attachments.emplace_back(Attachment{image.get_format(), image.get_sample_count(), image.get_usage()});
 	}
 }
@@ -93,6 +100,7 @@ vkb::RenderTarget::RenderTarget(std::vector<core::ImageView> &&image_views) :
     images{},
     views{std::move(image_views)}
 {
+	// 根据传入的image view创建渲染目标，至少一张图像视图
 	assert(!views.empty() && "Should specify at least 1 image view");
 
 	std::set<VkExtent2D, CompareExtent2D> unique_extent;
@@ -106,6 +114,7 @@ vkb::RenderTarget::RenderTarget(std::vector<core::ImageView> &&image_views) :
 
 	// Constructs a set of unique image extents given a vector of image views;
 	// allow only one extent size for a render target
+	// 所有的图像视图尺寸必须相同
 	std::transform(views.begin(), views.end(), std::inserter(unique_extent, unique_extent.end()), get_view_extent);
 	if (unique_extent.size() != 1)
 	{
@@ -135,6 +144,7 @@ const std::vector<Attachment> &RenderTarget::get_attachments() const
 	return attachments;
 }
 
+// 通过指引指定哪些attachments是input attachments
 void RenderTarget::set_input_attachments(std::vector<uint32_t> &input)
 {
 	input_attachments = input;
@@ -145,6 +155,7 @@ const std::vector<uint32_t> &RenderTarget::get_input_attachments() const
 	return input_attachments;
 }
 
+// out attachment，其实就是某个sub pass的color attachment，用索引指定
 void RenderTarget::set_output_attachments(std::vector<uint32_t> &output)
 {
 	output_attachments = output;

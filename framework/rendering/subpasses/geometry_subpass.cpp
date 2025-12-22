@@ -59,6 +59,8 @@ void GeometrySubpass::prepare()
 void GeometrySubpass::get_sorted_nodes(std::multimap<float, std::pair<vkb::scene_graph::NodeC *, sg::SubMesh *>> &opaque_nodes,
                                        std::multimap<float, std::pair<vkb::scene_graph::NodeC *, sg::SubMesh *>> &transparent_nodes)
 {
+	// 排序，分为不透明node和透明node两大类
+	// 同时从进到远排序
 	auto camera_transform = camera.get_node()->get_transform().get_world_matrix();
 
 	for (auto &mesh : meshes)

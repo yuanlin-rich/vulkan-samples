@@ -23,6 +23,8 @@
 
 namespace vkb
 {
+
+// 管线基类
 class Pipeline
 {
   public:
@@ -50,6 +52,7 @@ class Pipeline
 	PipelineState state;
 };
 
+// 计算管线
 class ComputePipeline : public Pipeline
 {
   public:
@@ -62,6 +65,7 @@ class ComputePipeline : public Pipeline
 	                PipelineState      &pipeline_state);
 };
 
+// 图形管线
 class GraphicsPipeline : public Pipeline
 {
   public:

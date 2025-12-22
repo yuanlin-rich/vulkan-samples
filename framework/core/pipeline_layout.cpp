@@ -38,6 +38,8 @@ PipelineLayout::PipelineLayout(vkb::core::DeviceC &device, const std::vector<Sha
 			std::string key = shader_resource.name;
 
 			// Since 'Input' and 'Output' resources can have the same name, we modify the key string
+			// input和output类型的shader可以拥有相同的名字，因此修改
+
 			if (shader_resource.type == ShaderResourceType::Input || shader_resource.type == ShaderResourceType::Output)
 			{
 				key = std::to_string(shader_resource.stages) + "_" + key;
@@ -80,6 +82,7 @@ PipelineLayout::PipelineLayout(vkb::core::DeviceC &device, const std::vector<Sha
 	}
 
 	// Create a descriptor set layout for each shader set in the shader modules
+	// 根据set创建descriptor set layout
 	for (auto &shader_set_it : shader_sets)
 	{
 		descriptor_set_layouts.emplace_back(&device.get_resource_cache().request_descriptor_set_layout(shader_set_it.first, shader_modules, shader_set_it.second));

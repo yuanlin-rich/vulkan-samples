@@ -25,6 +25,8 @@ namespace vkb
 {
 namespace
 {
+
+// 选择图像数量，确保它在允许的范围内
 inline uint32_t choose_image_count(
     uint32_t request_image_count,
     uint32_t min_image_count,
@@ -40,6 +42,7 @@ inline uint32_t choose_image_count(
 	return request_image_count;
 }
 
+// 选择图像数组层数，确保它在允许的范围内
 inline uint32_t choose_image_array_layers(
     uint32_t request_image_array_layers,
     uint32_t max_image_array_layers)
@@ -50,6 +53,8 @@ inline uint32_t choose_image_array_layers(
 	return request_image_array_layers;
 }
 
+// 选择交换链的尺寸，如果当前无效，则使用请求的尺寸
+// 如果当前尺寸有效，则确保请求的尺寸在允许的范围内
 inline VkExtent2D choose_extent(
     VkExtent2D        request_extent,
     const VkExtent2D &min_image_extent,
@@ -76,6 +81,7 @@ inline VkExtent2D choose_extent(
 	return request_extent;
 }
 
+// 选择交换链的显示模式，确保所选模式受支持
 inline VkPresentModeKHR choose_present_mode(
     VkPresentModeKHR                     request_present_mode,
     const std::vector<VkPresentModeKHR> &available_present_modes,
@@ -107,6 +113,7 @@ inline VkPresentModeKHR choose_present_mode(
 	}
 }
 
+// 选择交换链的表面格式，确保所选格式受支持
 inline VkSurfaceFormatKHR choose_surface_format(
     const VkSurfaceFormatKHR               requested_surface_format,
     const std::vector<VkSurfaceFormatKHR> &available_surface_formats,
@@ -160,6 +167,7 @@ inline VkSurfaceFormatKHR choose_surface_format(
 	return *surface_format_it;
 }
 
+// 选择交换链的转换方式，确保所选转换受支持
 inline VkSurfaceTransformFlagBitsKHR choose_transform(
     VkSurfaceTransformFlagBitsKHR request_transform,
     VkSurfaceTransformFlagsKHR    supported_transform,
@@ -175,6 +183,7 @@ inline VkSurfaceTransformFlagBitsKHR choose_transform(
 	return current_transform;
 }
 
+// 选择交换链的复合Alpha模式，确保所选模式受支持
 inline VkCompositeAlphaFlagBitsKHR choose_composite_alpha(VkCompositeAlphaFlagBitsKHR request_composite_alpha, VkCompositeAlphaFlagsKHR supported_composite_alpha)
 {
 	if (request_composite_alpha & supported_composite_alpha)
@@ -200,6 +209,7 @@ inline VkCompositeAlphaFlagBitsKHR choose_composite_alpha(VkCompositeAlphaFlagBi
 	throw std::runtime_error("No compatible composite alpha found.");
 }
 
+// 验证图像使用标志是否与格式特性兼容
 inline bool validate_format_feature(VkImageUsageFlagBits image_usage, VkFormatFeatureFlags supported_features)
 {
 	switch (image_usage)
@@ -211,6 +221,7 @@ inline bool validate_format_feature(VkImageUsageFlagBits image_usage, VkFormatFe
 	}
 }
 
+// 选择图像使用标志，确保所选标志受支持
 inline std::set<VkImageUsageFlagBits> choose_image_usage(const std::set<VkImageUsageFlagBits> &requested_image_usage_flags, VkImageUsageFlags supported_image_usage, VkFormatFeatureFlags supported_features)
 {
 	std::set<VkImageUsageFlagBits> validated_image_usage_flags;
@@ -263,6 +274,7 @@ inline std::set<VkImageUsageFlagBits> choose_image_usage(const std::set<VkImageU
 	return validated_image_usage_flags;
 }
 
+// 组合图像使用标志为单个VkImageUsageFlags值
 inline VkImageUsageFlags composite_image_flags(std::set<VkImageUsageFlagBits> &image_usage_flags)
 {
 	VkImageUsageFlags image_usage{};
@@ -382,15 +394,19 @@ Swapchain::Swapchain(Swapchain                                &old_swapchain,
     requested_compression{requested_compression},
     requested_compression_fixed_rate{requested_compression_fixed_rate}
 {
+	// 优先选择的present方式列表，如果列表内的present方式都不被支持，则使用FIFO作为默认值
 	this->present_mode_priority_list   = present_mode_priority_list;
+
+	// 优先选择的表面格式列表，如果列表内的表面格式都不被支持，则使用第一个支持的格式作为默认值
 	this->surface_format_priority_list = surface_format_priority_list;
 
+	// surface的能力，包含支持的图像数量、尺寸、使用标志等信息
 	VkSurfaceCapabilitiesKHR surface_capabilities{};
 	vkGetPhysicalDeviceSurfaceCapabilitiesKHR(this->device.get_gpu().get_handle(), surface, &surface_capabilities);
 
+	// 查询支持的表面格式
 	uint32_t surface_format_count{0U};
 	VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(this->device.get_gpu().get_handle(), surface, &surface_format_count, nullptr));
-
 	std::vector<VkSurfaceFormatKHR> surface_formats(surface_format_count);
 	VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(this->device.get_gpu().get_handle(), surface, &surface_format_count, surface_formats.data()));
 
@@ -400,6 +416,7 @@ Swapchain::Swapchain(Swapchain                                &old_swapchain,
 		LOGI("  \t{}", to_string(surface_format));
 	}
 
+	// 查询支持的present方式
 	uint32_t present_mode_count{0U};
 	VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(this->device.get_gpu().get_handle(), surface, &present_mode_count, nullptr));
 
@@ -441,9 +458,14 @@ Swapchain::Swapchain(Swapchain                                &old_swapchain,
 	create_info.oldSwapchain     = properties.old_swapchain;
 	create_info.surface          = surface;
 
+	// fixed_rate_flags: 复制请求的固定压缩率标志
+	// compression_control: 创建图像压缩控制结构体
+	// flags: 设置压缩控制标志（如默认压缩、固定率压缩或禁用压缩）
 	auto                         fixed_rate_flags = requested_compression_fixed_rate;
 	VkImageCompressionControlEXT compression_control{VK_STRUCTURE_TYPE_IMAGE_COMPRESSION_CONTROL_EXT};
 	compression_control.flags = requested_compression;
+
+	// 利用VK_EXT_image_compression_control_swapchain扩展来控制交换链图像的压缩方式，以平衡图像质量、性能和内存使用
 	if (device.is_extension_enabled(VK_EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_EXTENSION_NAME))
 	{
 		create_info.pNext = &compression_control;
@@ -451,11 +473,13 @@ Swapchain::Swapchain(Swapchain                                &old_swapchain,
 		if (VK_IMAGE_COMPRESSION_FIXED_RATE_EXPLICIT_EXT == requested_compression)
 		{
 			// Do not support compression for multi-planar formats
+			// 应用特定的固定压缩率（有损压缩）
 			compression_control.compressionControlPlaneCount = 1;
 			compression_control.pFixedRateFlags              = &fixed_rate_flags;
 		}
 		else if (VK_IMAGE_COMPRESSION_DISABLED_EXT == requested_compression)
 		{
+			// 仅用压缩
 			LOGW("(Swapchain) Disabling default (lossless) compression, which can negatively impact performance")
 		}
 	}
@@ -463,6 +487,7 @@ Swapchain::Swapchain(Swapchain                                &old_swapchain,
 	{
 		if (VK_IMAGE_COMPRESSION_DEFAULT_EXT != requested_compression)
 		{
+			// 拓展不支持压缩，发出警告，回退到默认设置
 			LOGW("(Swapchain) Compression cannot be controlled because VK_EXT_image_compression_control_swapchain is not enabled")
 
 			this->requested_compression            = VK_IMAGE_COMPRESSION_DEFAULT_EXT;
@@ -484,6 +509,7 @@ Swapchain::Swapchain(Swapchain                                &old_swapchain,
 
 	VK_CHECK(vkGetSwapchainImagesKHR(device.get_handle(), handle, &image_available, images.data()));
 
+	// 检查在创建交换链后，实际的图像压缩设置是否与请求的一致，如果不一致，则进行适当的调整和日志记录。
 	if (device.is_extension_enabled(VK_EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_EXTENSION_NAME) &&
 	    VK_IMAGE_COMPRESSION_FIXED_RATE_EXPLICIT_EXT == requested_compression)
 	{
@@ -548,6 +574,7 @@ VkSwapchainKHR Swapchain::get_handle() const
 
 VkResult Swapchain::acquire_next_image(uint32_t &image_index, VkSemaphore image_acquired_semaphore, VkFence fence) const
 {
+	// 获取下一张图像
 	return vkAcquireNextImageKHR(device.get_handle(), handle, std::numeric_limits<uint64_t>::max(), image_acquired_semaphore, fence, &image_index);
 }
 
@@ -598,6 +625,8 @@ VkImageCompressionFlagsEXT Swapchain::get_applied_compression() const
 
 std::vector<Swapchain::SurfaceFormatCompression> Swapchain::query_supported_fixed_rate_compression(vkb::core::DeviceC &device, const VkSurfaceKHR &surface)
 {
+	// 在支持VK_EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_EXTENSION_NAME扩展的设备上查询表面格式的压缩属性
+	// 每一种表面格式都会返回一个VkImageCompressionPropertiesEXT结构体，描述该格式支持的压缩特性
 	std::vector<SurfaceFormatCompression> surface_format_compression_list;
 
 	if (device.is_extension_enabled(VK_EXT_IMAGE_COMPRESSION_CONTROL_SWAPCHAIN_EXTENSION_NAME))

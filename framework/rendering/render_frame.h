@@ -28,12 +28,15 @@ namespace vkb
 {
 namespace rendering
 {
+
+// 分配buffer的策略，1）每个buffer有独立的buffer块，2）一个buffer块中可以有多个buffer
 enum BufferAllocationStrategy
 {
 	OneAllocationPerBuffer,
 	MultipleAllocationsPerBuffer
 };
 
+// 分配描述符的策略
 enum DescriptorManagementStrategy
 {
 	StoreInCache,
@@ -53,6 +56,8 @@ enum DescriptorManagementStrategy
  * the whole context must be destroyed. This is because each RenderFrame holds Vulkan objects
  * such as the swapchain image.
  */
+
+// 渲染帧，包含swapchain中的图像，以及渲染缩需要的资源，如command buffer，buffer，image等
 template <vkb::BindingType bindingType>
 class RenderFrame
 {
@@ -159,11 +164,15 @@ class RenderFrame
   private:
 	vkb::core::DeviceCpp                                                                             &device;
 	std::map<vk::BufferUsageFlags, std::vector<std::pair<vkb::BufferPoolCpp, vkb::BufferBlockCpp *>>> buffer_pools;
+
+	// 索引是queue family index，值是command pool的数组，为每个线程分配一个，同一个数组中的command pool的reset mode相同
 	std::map<uint32_t, std::vector<vkb::core::CommandPoolCpp>>                                        command_pools;           // Commands pools per queue family index
 	std::vector<std::unordered_map<std::size_t, vkb::core::HPPDescriptorPool>>                        descriptor_pools;        // Descriptor pools per thread
 	std::vector<std::unordered_map<std::size_t, vkb::core::HPPDescriptorSet>>                         descriptor_sets;         // Descriptor sets per thread
 	vkb::HPPFencePool                                                                                 fence_pool;
 	vkb::HPPSemaphorePool                                                                             semaphore_pool;
+
+	// 从swapchain获取的render target
 	std::unique_ptr<vkb::rendering::HPPRenderTarget>                                                  swapchain_render_target;
 	size_t                                                                                            thread_count;
 	BufferAllocationStrategy                                                                          buffer_allocation_strategy     = BufferAllocationStrategy::MultipleAllocationsPerBuffer;
@@ -179,16 +188,24 @@ inline RenderFrame<bindingType>::RenderFrame(vkb::core::Device<bindingType>     
                                              size_t                              thread_count) :
     device(reinterpret_cast<vkb::core::DeviceCpp &>(device_)), fence_pool{device}, semaphore_pool{device}, thread_count{thread_count}, descriptor_pools(thread_count), descriptor_sets(thread_count)
 {
+	// 包含设备，fence池，信号量池，线程数量，描述符池，描述符集合
+	// 其中描述符池和描述符集合为每个线程分配一份
+	
+	// buffer池每个block的大小
 	static constexpr uint32_t BUFFER_POOL_BLOCK_SIZE = 256;        // Block size of a buffer pool in kilobytes
 
 	// A map of the supported usages to a multiplier for the BUFFER_POOL_BLOCK_SIZE
+	// 每一种buffer都有独立的buffer池
 	static const std::unordered_map<vk::BufferUsageFlags, uint32_t> supported_usage_map = {
 	    {vk::BufferUsageFlagBits::eUniformBuffer, 1},
 	    {vk::BufferUsageFlagBits::eStorageBuffer, 2},        // x2 the size of BUFFER_POOL_BLOCK_SIZE since SSBOs are normally much larger than other types of buffers
 	    {vk::BufferUsageFlagBits::eVertexBuffer, 1},
 	    {vk::BufferUsageFlagBits::eIndexBuffer, 1}};
 
+	// 更新渲染目标
 	update_render_target(std::move(render_target));
+
+	// 为每一种buffer分配独立的buffer池
 	for (auto &usage_it : supported_usage_map)
 	{
 		auto [buffer_pools_it, inserted] = buffer_pools.emplace(usage_it.first, std::vector<std::pair<vkb::BufferPoolCpp, vkb::BufferBlockCpp *>>{});
@@ -197,6 +214,7 @@ inline RenderFrame<bindingType>::RenderFrame(vkb::core::Device<bindingType>     
 			throw std::runtime_error("Failed to insert buffer pool");
 		}
 
+		// 每个线程也有独立的buffer池
 		for (size_t i = 0; i < thread_count; ++i)
 		{
 			buffer_pools_it->second.push_back(
@@ -208,6 +226,7 @@ inline RenderFrame<bindingType>::RenderFrame(vkb::core::Device<bindingType>     
 template <vkb::BindingType bindingType>
 inline BufferAllocation<bindingType> RenderFrame<bindingType>::allocate_buffer(BufferUsageFlagsType usage, DeviceSizeType size, size_t thread_index)
 {
+	// 根据buffer的使用方式和线程号分配buffer
 	assert(thread_index < thread_count && "Thread index is out of bounds");
 
 	if constexpr (bindingType == vkb::BindingType::Cpp)
@@ -225,6 +244,7 @@ inline BufferAllocation<bindingType> RenderFrame<bindingType>::allocate_buffer(B
 template <vkb::BindingType bindingType>
 inline vkb::BufferAllocationCpp RenderFrame<bindingType>::allocate_buffer_impl(vk::BufferUsageFlags usage, vk::DeviceSize size, size_t thread_index)
 {
+	// 根据buffer的使用方式和线程号分配buffer，实现部分
 	// Find a pool for this usage
 	auto buffer_pool_it = buffer_pools.find(usage);
 	if (buffer_pool_it == buffer_pools.end())
@@ -234,29 +254,36 @@ inline vkb::BufferAllocationCpp RenderFrame<bindingType>::allocate_buffer_impl(v
 	}
 
 	assert(thread_index < buffer_pool_it->second.size());
+
+	// 查找当前线程号对应的buffer池和buffer块
 	auto &buffer_pool  = buffer_pool_it->second[thread_index].first;
 	auto &buffer_block = buffer_pool_it->second[thread_index].second;
 
+	// 策略为每个buffer独立申请内存，则申请新的buffer块
 	bool want_minimal_block = (buffer_allocation_strategy == BufferAllocationStrategy::OneAllocationPerBuffer);
 
 	if (want_minimal_block || !buffer_block || !buffer_block->can_allocate(size))
 	{
+		// 1）策略为每个buffer独立申请内存 2）buffer块无效 3）buffer块无法申请内存，三个条件满足一个，申请新的buffer块
 		// If we are creating a buffer for each allocation of there is no block associated with the pool or the current block is too small
 		// for this allocation, request a new buffer block
 		buffer_block = &buffer_pool.request_buffer_block(size, want_minimal_block);
 	}
 
+	// 从当前buffer块中申请内存
 	return buffer_block->allocate(to_u32(size));
 }
 
 template <vkb::BindingType bindingType>
 inline void RenderFrame<bindingType>::clear_descriptors()
 {
+	// 清空描述符集
 	for (auto &desc_sets_per_thread : descriptor_sets)
 	{
 		desc_sets_per_thread.clear();
 	}
 
+	// 清空描述符池
 	for (auto &desc_pools_per_thread : descriptor_pools)
 	{
 		for (auto &desc_pool : desc_pools_per_thread)
@@ -270,10 +297,12 @@ template <vkb::BindingType bindingType>
 inline std::vector<vkb::core::CommandPoolCpp> &RenderFrame<bindingType>::get_command_pools(const vkb::core::HPPQueue  &queue,
                                                                                            vkb::CommandBufferResetMode reset_mode)
 {
+	// 根据队列和重制命令的方式申请命令缓存池
 	auto command_pool_it = command_pools.find(queue.get_family_index());
 
 	if (command_pool_it != command_pools.end())
 	{
+		// 存在当前queue对应的command pool，如果reset mode不一致，则设备等待，删除command pool
 		assert(!command_pool_it->second.empty());
 		if (command_pool_it->second[0].get_reset_mode() != reset_mode)
 		{
@@ -288,6 +317,7 @@ inline std::vector<vkb::core::CommandPoolCpp> &RenderFrame<bindingType>::get_com
 		}
 	}
 
+	// 插入新的command pool并且返回
 	bool inserted                       = false;
 	std::tie(command_pool_it, inserted) = command_pools.emplace(queue.get_family_index(), std::vector<vkb::core::CommandPoolCpp>{});
 	if (!inserted)
@@ -307,6 +337,7 @@ template <vkb::BindingType bindingType>
 inline vkb::core::CommandPool<bindingType> &
     RenderFrame<bindingType>::get_command_pool(QueueType const &queue, vkb::CommandBufferResetMode reset_mode, size_t thread_index)
 {
+	// 根据队列，重制命令的方式，和线程号获取命令缓存池
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return get_command_pool_impl(queue, reset_mode, thread_index);
@@ -322,6 +353,7 @@ template <vkb::BindingType bindingType>
 inline vkb::core::CommandPoolCpp &
     RenderFrame<bindingType>::get_command_pool_impl(vkb::core::HPPQueue const &queue, vkb::CommandBufferResetMode reset_mode, size_t thread_index)
 {
+	// 根据队列，重制命令的方式，和线程号获取命令缓存池
 	assert(thread_index < thread_count && "Thread index is out of bounds");
 
 	auto &command_pools = get_command_pools(queue, reset_mode);
@@ -431,6 +463,7 @@ inline typename RenderFrame<bindingType>::DescriptorSetType RenderFrame<bindingT
                                                                                                              bool                                        update_after_bind,
                                                                                                              size_t                                      thread_index)
 {
+	// 根据描述符集合布局，申请描述符集合
 	assert(thread_index < thread_count && "Thread index is out of bounds");
 	assert(thread_index < descriptor_pools.size());
 
@@ -455,9 +488,13 @@ inline vk::DescriptorSet RenderFrame<bindingType>::request_descriptor_set_impl(v
                                                                                bool                                        update_after_bind,
                                                                                size_t                                      thread_index)
 {
+	// 根据描述符集合布局，申请描述符集合
+	// 根据线程号和描述符集合布局，获取对应的描述符池
 	auto &descriptor_pool = vkb::common::request_resource(device, nullptr, descriptor_pools[thread_index], descriptor_set_layout);
 	if (descriptor_management_strategy == DescriptorManagementStrategy::StoreInCache)
 	{
+		// 如果策略是复用缓存中的描述符集合
+		// 统计需要在绑定后更新的绑定点
 		// The bindings we want to update before binding, if empty we update all bindings
 		std::set<uint32_t> bindings_to_update;
 		// If update after bind is enabled, we store the binding index of each binding that need to be updated before being bound
@@ -466,25 +503,32 @@ inline vk::DescriptorSet RenderFrame<bindingType>::request_descriptor_set_impl(v
 			auto aggregate_binding_to_update = [&bindings_to_update, &descriptor_set_layout](const auto &infos_map) {
 				for (const auto &[binding_index, ignored] : infos_map)
 				{
+					// 当前绑定点是否制定了绑定后更新的标识
 					if (!(descriptor_set_layout.get_layout_binding_flag(binding_index) & vk::DescriptorBindingFlagBits::eUpdateAfterBind))
 					{
 						bindings_to_update.insert(binding_index);
 					}
 				}
 			};
+			// 统计需要在绑定后更新的绑定点
 			aggregate_binding_to_update(buffer_infos);
 			aggregate_binding_to_update(image_infos);
 		}
 
 		// Request a descriptor set from the render frame, and write the buffer infos and image infos of all the specified bindings
 		assert(thread_index < descriptor_sets.size());
+
+		// 申请描述符集合
 		auto &descriptor_set =
 		    vkb::common::request_resource(device, nullptr, descriptor_sets[thread_index], descriptor_set_layout, descriptor_pool, buffer_infos, image_infos);
+
+		// 更新绑定后更新的描述符集合
 		descriptor_set.update({bindings_to_update.begin(), bindings_to_update.end()});
 		return descriptor_set.get_handle();
 	}
 	else
 	{
+		// 否则直接申请新的描述集合，并且写入数据
 		// Request a descriptor pool, allocate a descriptor set, write buffer and image data to it
 		vkb::core::HPPDescriptorSet descriptor_set{device, descriptor_set_layout, descriptor_pool, buffer_infos, image_infos};
 		descriptor_set.apply_writes();
@@ -497,8 +541,10 @@ inline void RenderFrame<bindingType>::reset()
 {
 	VK_CHECK(fence_pool.wait());
 
+	// 等待fence池完成
 	fence_pool.reset();
 
+	// 更新命令缓存池
 	for (auto &command_pools_per_queue : command_pools)
 	{
 		for (auto &command_pool : command_pools_per_queue.second)
@@ -506,7 +552,8 @@ inline void RenderFrame<bindingType>::reset()
 			command_pool.reset_pool();
 		}
 	}
-
+	
+	// 重制buffer
 	for (auto &buffer_pools_per_usage : buffer_pools)
 	{
 		for (auto &buffer_pool : buffer_pools_per_usage.second)
@@ -518,6 +565,7 @@ inline void RenderFrame<bindingType>::reset()
 
 	semaphore_pool.reset();
 
+	// 根据策略，决定是否清清除描述符集合
 	if (descriptor_management_strategy == DescriptorManagementStrategy::CreateDirectly)
 	{
 		clear_descriptors();
@@ -527,18 +575,21 @@ inline void RenderFrame<bindingType>::reset()
 template <vkb::BindingType bindingType>
 inline void RenderFrame<bindingType>::set_buffer_allocation_strategy(BufferAllocationStrategy new_strategy)
 {
+	// 设置buffer申请策略
 	buffer_allocation_strategy = new_strategy;
 }
 
 template <vkb::BindingType bindingType>
 inline void RenderFrame<bindingType>::set_descriptor_management_strategy(DescriptorManagementStrategy new_strategy)
 {
+	// 设置descriptor set申请策略
 	descriptor_management_strategy = new_strategy;
 }
 
 template <vkb::BindingType bindingType>
 inline void RenderFrame<bindingType>::update_descriptor_sets(size_t thread_index)
 {
+	// 更新描述符集合
 	assert(thread_index < descriptor_sets.size());
 	auto &thread_descriptor_sets = descriptor_sets[thread_index];
 	for (auto &descriptor_set_it : thread_descriptor_sets)
@@ -550,6 +601,7 @@ inline void RenderFrame<bindingType>::update_descriptor_sets(size_t thread_index
 template <vkb::BindingType bindingType>
 inline void RenderFrame<bindingType>::update_render_target(std::unique_ptr<RenderTargetType> &&render_target)
 {
+	// 更新命令缓存
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		swapchain_render_target = std::move(render_target);

@@ -34,6 +34,7 @@ using DeviceC = Device<vkb::BindingType::C>;
  */
 class AccelerationStructure
 {
+	// 光线跟踪中的加速结构
   public:
 	/**
 	 * @brief Creates a acceleration structure and the required buffer to store it's geometries
@@ -62,6 +63,7 @@ class AccelerationStructure
 	 * @param index_buffer_data_address set this if don't want the index_buffer data_address
 	 * @param transform_buffer_data_address set this if don't want the transform_buffer data_address
 	 */
+	// 添加三角形
 	uint64_t add_triangle_geometry(vkb::core::BufferC &vertex_buffer,
 	                               vkb::core::BufferC &index_buffer,
 	                               vkb::core::BufferC &transform_buffer,
@@ -76,6 +78,7 @@ class AccelerationStructure
 	                               uint64_t            index_buffer_data_address     = 0,
 	                               uint64_t            transform_buffer_data_address = 0);
 
+	// 更新三角形
 	void update_triangle_geometry(uint64_t triangleUUID, std::unique_ptr<vkb::core::BufferC> &vertex_buffer,
 	                              std::unique_ptr<vkb::core::BufferC> &index_buffer,
 	                              std::unique_ptr<vkb::core::BufferC> &transform_buffer,
@@ -97,11 +100,13 @@ class AccelerationStructure
 	 * @param transform_offset Offset of this geometry in the transform data buffer
 	 * @param flags Ray tracing geometry flags
 	 */
+	// 添加实例
 	uint64_t add_instance_geometry(std::unique_ptr<vkb::core::BufferC> &instance_buffer,
 	                               uint32_t                             instance_count,
 	                               uint32_t                             transform_offset = 0,
 	                               VkGeometryFlagsKHR                   flags            = VK_GEOMETRY_OPAQUE_BIT_KHR);
 
+	// 更新实例
 	void update_instance_geometry(uint64_t instance_UID, std::unique_ptr<vkb::core::BufferC> &instance_buffer,
 	                              uint32_t           instance_count,
 	                              uint32_t           transform_offset = 0,
@@ -113,6 +118,7 @@ class AccelerationStructure
 	 * @param flags Build flags
 	 * @param mode Build mode (build or update)
 	 */
+	// 编译加速结构
 	void build(VkQueue                              queue,
 	           VkBuildAccelerationStructureFlagsKHR flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
 	           VkBuildAccelerationStructureModeKHR  mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR);

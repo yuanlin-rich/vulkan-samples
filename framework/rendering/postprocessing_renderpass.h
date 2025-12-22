@@ -41,26 +41,31 @@ struct PairHasher
 /**
  * @brief Maps in-shader binding names to indices into a RenderTarget's attachments.
  */
+// binding name和attachment索引的映射
 using AttachmentMap = std::unordered_map<std::string, uint32_t>;
 
 /**
  * @brief Maps in-shader binding names to the core::SampledImage to bind.
  */
+// binding name和sampled image的映射
 using SampledMap = std::unordered_map<std::string, core::SampledImage>;
 
 /**
  * @brief Maps in-shader binding names to the core::ImageView to bind for storage images.
  */
+// binding name和image view之间的映射
 using StorageImageMap = std::unordered_map<std::string, const core::ImageView *>;
 
 /**
  * @brief A list of indices into a RenderTarget's attachments.
  */
+// attachment的索引列表
 using AttachmentList = std::vector<uint32_t>;
 
 /**
  * @brief A set of indices into a RenderTarget's attachments.
  */
+// attachment的索引集合
 using AttachmentSet = std::unordered_set<uint32_t>;
 
 class PostProcessingRenderPass;
@@ -68,6 +73,7 @@ class PostProcessingRenderPass;
 /**
  * @brief A single step of a vkb::PostProcessingRenderPass.
  */
+// 后处理subpass
 class PostProcessingSubpass : public vkb::rendering::SubpassC
 {
   public:
@@ -200,6 +206,7 @@ class PostProcessingSubpass : public vkb::rendering::SubpassC
 	static void default_draw_func(vkb::core::CommandBufferC &command_buffer, vkb::RenderTarget &render_target);
 
   private:
+	// 隶属于哪一个后处理render pass
 	PostProcessingRenderPass *parent;
 
 	ShaderVariant fs_variant{};
@@ -219,6 +226,7 @@ class PostProcessingSubpass : public vkb::rendering::SubpassC
 /**
  * @brief A collection of vkb::PostProcessingSubpass that are run as a single renderpass.
  */
+// 后处理render pass，将多个后处理subpass合并成一个
 class PostProcessingRenderPass : public PostProcessingPass<PostProcessingRenderPass>
 {
   public:

@@ -39,6 +39,7 @@ inline void read_resource_decoration(const spirv_cross::Compiler & /*compiler*/,
 	LOGE("Not implemented! Read resources decoration of type.");
 }
 
+// 读取shader资源的location
 template <>
 inline void read_resource_decoration<spv::DecorationLocation>(const spirv_cross::Compiler &compiler,
                                                               const spirv_cross::Resource &resource,
@@ -48,6 +49,7 @@ inline void read_resource_decoration<spv::DecorationLocation>(const spirv_cross:
 	shader_resource.location = compiler.get_decoration(resource.id, spv::DecorationLocation);
 }
 
+// 读取shader资源的set
 template <>
 inline void read_resource_decoration<spv::DecorationDescriptorSet>(const spirv_cross::Compiler &compiler,
                                                                    const spirv_cross::Resource &resource,
@@ -57,6 +59,7 @@ inline void read_resource_decoration<spv::DecorationDescriptorSet>(const spirv_c
 	shader_resource.set = compiler.get_decoration(resource.id, spv::DecorationDescriptorSet);
 }
 
+// 读取shader资源的绑定点
 template <>
 inline void read_resource_decoration<spv::DecorationBinding>(const spirv_cross::Compiler &compiler,
                                                              const spirv_cross::Resource &resource,
@@ -66,6 +69,7 @@ inline void read_resource_decoration<spv::DecorationBinding>(const spirv_cross::
 	shader_resource.binding = compiler.get_decoration(resource.id, spv::DecorationBinding);
 }
 
+// 读取shader的input attachment的索引
 template <>
 inline void read_resource_decoration<spv::DecorationInputAttachmentIndex>(const spirv_cross::Compiler &compiler,
                                                                           const spirv_cross::Resource &resource,
@@ -75,6 +79,7 @@ inline void read_resource_decoration<spv::DecorationInputAttachmentIndex>(const 
 	shader_resource.input_attachment_index = compiler.get_decoration(resource.id, spv::DecorationInputAttachmentIndex);
 }
 
+// 读取shader是否不可写
 template <>
 inline void read_resource_decoration<spv::DecorationNonWritable>(const spirv_cross::Compiler &compiler,
                                                                  const spirv_cross::Resource &resource,
@@ -84,6 +89,7 @@ inline void read_resource_decoration<spv::DecorationNonWritable>(const spirv_cro
 	shader_resource.qualifiers |= ShaderResourceQualifiers::NonWritable;
 }
 
+// 读取shader是否不可读
 template <>
 inline void read_resource_decoration<spv::DecorationNonReadable>(const spirv_cross::Compiler &compiler,
                                                                  const spirv_cross::Resource &resource,
@@ -93,6 +99,8 @@ inline void read_resource_decoration<spv::DecorationNonReadable>(const spirv_cro
 	shader_resource.qualifiers |= ShaderResourceQualifiers::NonReadable;
 }
 
+// 读取vec的维度
+// 如果是mat，还要获取列数
 inline void read_resource_vec_size(const spirv_cross::Compiler &compiler,
                                    const spirv_cross::Resource &resource,
                                    ShaderResource &             shader_resource,
@@ -104,6 +112,7 @@ inline void read_resource_vec_size(const spirv_cross::Compiler &compiler,
 	shader_resource.columns  = spirv_type.columns;
 }
 
+// 获取数组元素个数
 inline void read_resource_array_size(const spirv_cross::Compiler &compiler,
                                      const spirv_cross::Resource &resource,
                                      ShaderResource &             shader_resource,
@@ -114,6 +123,7 @@ inline void read_resource_array_size(const spirv_cross::Compiler &compiler,
 	shader_resource.array_size = spirv_type.array.size() ? spirv_type.array[0] : 1;
 }
 
+// 获取资源大小
 inline void read_resource_size(const spirv_cross::Compiler &compiler,
                                const spirv_cross::Resource &resource,
                                ShaderResource &             shader_resource,
@@ -130,6 +140,7 @@ inline void read_resource_size(const spirv_cross::Compiler &compiler,
 	shader_resource.size = to_u32(compiler.get_declared_struct_size_runtime_array(spirv_type, array_size));
 }
 
+// 获取constant大小
 inline void read_resource_size(const spirv_cross::Compiler &    compiler,
                                const spirv_cross::SPIRConstant &constant,
                                ShaderResource &                 shader_resource,
@@ -157,6 +168,7 @@ inline void read_resource_size(const spirv_cross::Compiler &    compiler,
 	}
 }
 
+// 获取input相关信息
 template <>
 inline void read_shader_resource<ShaderResourceType::Input>(const spirv_cross::Compiler &compiler,
                                                             VkShaderStageFlagBits        stage,
@@ -180,6 +192,7 @@ inline void read_shader_resource<ShaderResourceType::Input>(const spirv_cross::C
 	}
 }
 
+// 获取input attachment相关信息
 template <>
 inline void read_shader_resource<ShaderResourceType::InputAttachment>(const spirv_cross::Compiler &compiler,
                                                                       VkShaderStageFlagBits /*stage*/,
@@ -204,6 +217,7 @@ inline void read_shader_resource<ShaderResourceType::InputAttachment>(const spir
 	}
 }
 
+// 获取output相关信息
 template <>
 inline void read_shader_resource<ShaderResourceType::Output>(const spirv_cross::Compiler &compiler,
                                                              VkShaderStageFlagBits        stage,
@@ -227,6 +241,7 @@ inline void read_shader_resource<ShaderResourceType::Output>(const spirv_cross::
 	}
 }
 
+// 获取images相关信息
 template <>
 inline void read_shader_resource<ShaderResourceType::Image>(const spirv_cross::Compiler &compiler,
                                                             VkShaderStageFlagBits        stage,
@@ -250,6 +265,7 @@ inline void read_shader_resource<ShaderResourceType::Image>(const spirv_cross::C
 	}
 }
 
+// 获取image sampler相关信息
 template <>
 inline void read_shader_resource<ShaderResourceType::ImageSampler>(const spirv_cross::Compiler &compiler,
                                                                    VkShaderStageFlagBits        stage,
@@ -273,6 +289,7 @@ inline void read_shader_resource<ShaderResourceType::ImageSampler>(const spirv_c
 	}
 }
 
+// 获取image storage相关信息
 template <>
 inline void read_shader_resource<ShaderResourceType::ImageStorage>(const spirv_cross::Compiler &compiler,
                                                                    VkShaderStageFlagBits        stage,
@@ -298,6 +315,7 @@ inline void read_shader_resource<ShaderResourceType::ImageStorage>(const spirv_c
 	}
 }
 
+// 获取sampler相关信息
 template <>
 inline void read_shader_resource<ShaderResourceType::Sampler>(const spirv_cross::Compiler &compiler,
                                                               VkShaderStageFlagBits        stage,
@@ -321,6 +339,7 @@ inline void read_shader_resource<ShaderResourceType::Sampler>(const spirv_cross:
 	}
 }
 
+// 获取buffer uniform相关信息
 template <>
 inline void read_shader_resource<ShaderResourceType::BufferUniform>(const spirv_cross::Compiler &compiler,
                                                                     VkShaderStageFlagBits        stage,
@@ -345,6 +364,7 @@ inline void read_shader_resource<ShaderResourceType::BufferUniform>(const spirv_
 	}
 }
 
+// 获取buffer storage相关信息
 template <>
 inline void read_shader_resource<ShaderResourceType::BufferStorage>(const spirv_cross::Compiler &compiler,
                                                                     VkShaderStageFlagBits        stage,
@@ -372,6 +392,7 @@ inline void read_shader_resource<ShaderResourceType::BufferStorage>(const spirv_
 }
 }        // namespace
 
+// 反射资源
 bool SPIRVReflection::reflect_shader_resources(VkShaderStageFlagBits stage, const std::vector<uint32_t> &spirv, std::vector<ShaderResource> &resources, const ShaderVariant &variant)
 {
 	spirv_cross::CompilerGLSL compiler{spirv};
@@ -388,6 +409,7 @@ bool SPIRVReflection::reflect_shader_resources(VkShaderStageFlagBits stage, cons
 	return true;
 }
 
+// 反射各种shader resources
 void SPIRVReflection::parse_shader_resources(const spirv_cross::Compiler &compiler, VkShaderStageFlagBits stage, std::vector<ShaderResource> &resources, const ShaderVariant &variant)
 {
 	read_shader_resource<ShaderResourceType::Input>(compiler, stage, resources, variant);
@@ -401,6 +423,7 @@ void SPIRVReflection::parse_shader_resources(const spirv_cross::Compiler &compil
 	read_shader_resource<ShaderResourceType::BufferStorage>(compiler, stage, resources, variant);
 }
 
+// 反射常量
 void SPIRVReflection::parse_push_constants(const spirv_cross::Compiler &compiler, VkShaderStageFlagBits stage, std::vector<ShaderResource> &resources, const ShaderVariant &variant)
 {
 	auto shader_resources = compiler.get_shader_resources();
@@ -432,6 +455,7 @@ void SPIRVReflection::parse_push_constants(const spirv_cross::Compiler &compiler
 	}
 }
 
+// 反射sepcialization constants
 void SPIRVReflection::parse_specialization_constants(const spirv_cross::Compiler &compiler, VkShaderStageFlagBits stage, std::vector<ShaderResource> &resources, const ShaderVariant &variant)
 {
 	auto specialization_constants = compiler.get_specialization_constants();

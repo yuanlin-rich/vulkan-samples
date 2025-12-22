@@ -54,17 +54,36 @@ uint64_t AccelerationStructure::add_triangle_geometry(vkb::core::BufferC &vertex
 {
 	VkAccelerationStructureGeometryKHR geometry{};
 	geometry.sType                                          = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+	// 三角形
 	geometry.geometryType                                   = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+	// 物体是否透明等
 	geometry.flags                                          = flags;
+
+	// 几何体类型，三角形或者aabb包围盒，这里是三角形
 	geometry.geometry.triangles.sType                       = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+
+	// 顶点格式
 	geometry.geometry.triangles.vertexFormat                = vertex_format;
+
+	// 最大顶点个数
 	geometry.geometry.triangles.maxVertex                   = max_vertex;
+
+	// 顶点步长
 	geometry.geometry.triangles.vertexStride                = vertex_stride;
+
+	// 索引类型
 	geometry.geometry.triangles.indexType                   = index_type;
+
+	// 顶点数据gpu地址
 	geometry.geometry.triangles.vertexData.deviceAddress    = vertex_buffer_data_address == 0 ? vertex_buffer.get_device_address() : vertex_buffer_data_address;
+
+	// 索引数据gpu地址
 	geometry.geometry.triangles.indexData.deviceAddress     = index_buffer_data_address == 0 ? index_buffer.get_device_address() : index_buffer_data_address;
+
+	// 坐标变换数据gpu地址
 	geometry.geometry.triangles.transformData.deviceAddress = transform_buffer_data_address == 0 ? transform_buffer.get_device_address() : transform_buffer_data_address;
 
+	// 保存了几何体，三角形数量，变换偏移量（字节为单位）
 	uint64_t index = geometries.size();
 	geometries.insert({index, {geometry, triangle_count, transform_offset}});
 	return index;
@@ -81,6 +100,7 @@ void AccelerationStructure::update_triangle_geometry(uint64_t                   
                                                      uint64_t index_buffer_data_address,
                                                      uint64_t transform_buffer_data_address)
 {
+	// 更新指定的集合体
 	VkAccelerationStructureGeometryKHR *geometry             = &geometries[triangleUUID].geometry;
 	geometry->sType                                          = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
 	geometry->geometryType                                   = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
@@ -100,12 +120,23 @@ void AccelerationStructure::update_triangle_geometry(uint64_t                   
 
 uint64_t AccelerationStructure::add_instance_geometry(std::unique_ptr<vkb::core::BufferC> &instance_buffer, uint32_t instance_count, uint32_t transform_offset, VkGeometryFlagsKHR flags)
 {
+	// 添加实例
 	VkAccelerationStructureGeometryKHR geometry{};
 	geometry.sType                                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+	
+	// 实例
 	geometry.geometryType                          = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+
+	// 标识位
 	geometry.flags                                 = flags;
+
+	// 实例类型
 	geometry.geometry.instances.sType              = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+
+	// 不使用pointer数组，data中就是实例的数组，而不是指针的数组
 	geometry.geometry.instances.arrayOfPointers    = VK_FALSE;
+
+	// instance缓存的gpu地址
 	geometry.geometry.instances.data.deviceAddress = instance_buffer->get_device_address();
 
 	uint64_t index = geometries.size();
@@ -118,6 +149,7 @@ void AccelerationStructure::update_instance_geometry(uint64_t                   
                                                      uint32_t instance_count, uint32_t transform_offset,
                                                      VkGeometryFlagsKHR flags)
 {
+	// 更新实例
 	VkAccelerationStructureGeometryKHR *geometry    = &geometries[instance_UID].geometry;
 	geometry->sType                                 = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
 	geometry->geometryType                          = VK_GEOMETRY_TYPE_INSTANCES_KHR;
@@ -132,6 +164,7 @@ void AccelerationStructure::update_instance_geometry(uint64_t                   
 
 void AccelerationStructure::build(VkQueue queue, VkBuildAccelerationStructureFlagsKHR flags, VkBuildAccelerationStructureModeKHR mode)
 {
+	// 编译加速结构后，加速结构才成使用
 	assert(!geometries.empty());
 
 	std::vector<VkAccelerationStructureGeometryKHR>       acceleration_structure_geometries;

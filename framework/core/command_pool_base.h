@@ -63,6 +63,7 @@ class CommandPoolBase
 	vk::CommandPool                              get_handle() const;
 	uint32_t                                     get_queue_family_index() const;
 	vkb::rendering::RenderFrameCpp              *get_render_frame();
+	// 三种重置方式：1）重置整个command pool，2）重置单个command buffer，3）不能重置，每次必须创建新的command buffer
 	vkb::CommandBufferResetMode                  get_reset_mode() const;
 	size_t                                       get_thread_index() const;
 	std::shared_ptr<vkb::core::CommandBufferCpp> request_command_buffer(vkb::core::CommandPoolCpp &commandPool, vk::CommandBufferLevel level);

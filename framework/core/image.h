@@ -160,31 +160,47 @@ class Image : public vkb::allocated::AllocatedC<VkImage>
 
 	Image &operator=(Image &&) = delete;
 
+	// 图像类型，1D，2D还是3D
 	VkImageType get_type() const;
 
+	// 图像尺寸
 	const VkExtent3D &get_extent() const;
 
+	// 图像格式
 	VkFormat get_format() const;
 
+	// 图像采样数
 	VkSampleCountFlagBits get_sample_count() const;
 
+	// 图像用途
 	VkImageUsageFlags get_usage() const;
 
+	// 图像tiling格式
 	VkImageTiling get_tiling() const;
 
+	// 图像的子资源
 	const VkImageSubresource &get_subresource() const;
 
+	// 图像layer数量
 	uint32_t get_array_layer_count() const;
 
 	std::unordered_set<ImageView *> &get_views();
 
+	// 图像需要的内存大小
 	VkDeviceSize get_image_required_size() const;
 
+	// 图像应用的压缩格式
 	VkImageCompressionPropertiesEXT get_applied_compression() const;
 
   private:
 	/// Image views referring to this image
+	// 保留常见图像的信息
 	VkImageCreateInfo               create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+
+	// 图像的子资源，包含三个方面
+	// 图像的颜色数据，深度数据，模板数据
+	// 图像mipmap的层数
+	// 图像array的索引
 	VkImageSubresource              subresource{};
 	std::unordered_set<ImageView *> views;
 };
