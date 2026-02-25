@@ -1,0 +1,78 @@
+////
+- Copyright (c) 2019-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 描述符与缓冲管理（Descriptor and buffer management）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/descriptor_management[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+Vulkan 应用需要实现“描述符池与描述符集”的管理系统。最直接灵活的做法是每帧重建，但这在移动平台尤其低效。描述符管理与“如何在 VkBuffer 中打包数据”的缓冲管理密切相关。本教程探讨改进两者的若干选项。
+
+== 问题背景
+
+动态物体渲染通常需要向 GPU 推送每物体数据（如 MVP 矩阵）。若超出推常量上限，则需写入 VkBuffer 并通过描述符集绑定。材质也需要其描述符集（纹理集合）。可分别绑定“每材质集、每物体集”，也可合并为单集。复杂应用会有大量需“按需更新”的描述符集（如纹理流加载/卸载）。
+
+最简单的规避法是“每帧一个或多个 VkDescriptorPool”：帧首 `vkResetDescriptorPool()`，随后 `vkAllocateDescriptorSets()` + `vkUpdateDescriptorSets()`。但这些调用在移动端会显著增加 CPU 帧时，极端情况下“更新描述符”的耗时甚至超过绘制本身。
+
+== 缓存描述符集
+
+关键是尽可能复用。不要每帧重置 pool，而是用缓存结构（如哈希表，以“内容”作键）持有 VkDescriptorSet 句柄；或直接把句柄存入材质/网格对象，减少间接层。
+
+在 CPU 压重场景中，缓存带来显著收益：示例由 ~44ms（23FPS）降至 ~27ms（37FPS），帧时下降约 38%。Streamline 亦显示 CPU 侧改进。复杂引擎还需考虑“淘汰策略”（若某集若干帧未使用则回收）。
+
+注意：若需单独释放集，pool 必须以 `VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT` 创建；不设置该位时，移动实现可采用更简单（更快）的分配器。可改用“更新已分配但闲置的集”以避免该标志，复用时直接重写内容（参见 subpasses 示例）。
+
+== 缓冲管理
+
+若缓存不易实现，可从“缓冲布局”入手。直觉做法是“每物体一个 VkBuffer 并每帧更新”，但在多帧并行下需多份副本，或用“单 Buffer，大小 = num_frames * size，并按帧索引动态偏移”。默认配置即为“每帧每物体一个 Buffer”，这会导致：
+- 需要大量描述符集（每物体一集指向其 VkBuffer）；
+- 独立更新许多 Buffer，难以控制内存布局与缓存命中；
+
+可反向思考：改为“每帧一个 VkBuffer 存放所有物体数据”，帧首清空，逐物体写入并记录“动态偏移”，在 `vkCmdBindDescriptorSets()` 处使用。这样：
+- 描述符集数量减少（多个物体共用一个集，不同偏移）；
+- 可自定义 Buffer 内部布局；
+
+示例显示该方案的收益与“缓存描述符集”相近。对更复杂场景，两者可叠加：
+- 当描述符集数量主要来自“纹理/材质”而非 UBO 时，缓存尤为关键；
+- 通过“单/少量 Buffer + 动态偏移”降低描述符集总量，减轻缓存压力；
+
+== 进一步资源
+
+- Fortnite on Mobile（GDC 2019）中“DescriptorSet cache”部分
+- Writing an efficient Vulkan renderer（GPU Zen 2）
+
+== 最佳实践
+
+- 建议：
+  - 优先“更新已分配但未再引用”的描述符集，而非每帧重置池并重新分配；
+  - 复用已分配的描述符集，不要重复写入相同信息；
+  - 在可行处引入“描述符集缓存”；
+  - 考虑“每帧单（或少量）VkBuffer + 动态偏移”的组织；
+- 避免：
+  - 在性能关键路径上从池分配描述符集；
+  - 每帧分配/释放/更新描述符集（非必要情况下）；
+  - 给 pool 设 `FREE_DESCRIPTOR_SET_BIT`（除非确需逐集释放）；
+- 影响：
+  - 增加 draw 调用的 CPU 负载；
+  - 设置 `FREE_DESCRIPTOR_SET_BIT` 可能阻碍实现使用更高效的分配器；
+- 调试：
+  - 用 CPU 分析器检查 `vkUpdateDescriptorSets()` 的耗时；
+  - 监控 `vkAllocateDescriptorSets()` 是否有竞争/阻塞。

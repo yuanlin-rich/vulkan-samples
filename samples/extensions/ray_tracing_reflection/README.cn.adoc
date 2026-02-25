@@ -1,0 +1,115 @@
+////
+* Copyright (c) 2014-2025, NVIDIA CORPORATION.  All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-FileCopyrightText: Copyright (c) 2014-2025 NVIDIA CORPORATION
+ * SPDX-License-Identifier: Apache-2.0
+////
+= 光线追踪：反射（Ray tracing - reflection）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/ray_tracing_reflection[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./img1.png[]
+
+== 概览
+
+本示例在“光线追踪基础”示例的基础上扩展，引入多几何体、实例与材质，并展示如何投射阴影射线与反射。
+
+== 几何体、BLAS 与 TLAS
+
+几何结构类似 OBJ 格式：顶点（位置、法线）与每个三角形的索引三元组；每个三角形有材质索引。示例场景包含一个平面与一个立方体。
+
+参见 `RaytracingReflection::create_scene()`。
+
+=== `create_model()`
+
+为每个几何体在 GPU 上分配并上传数据：
+- 顶点（位置与法线）
+- 索引（三角形顶点索引）
+- 材质索引（每三角形一个材质 ID）
+- 材质列表（反照率、镜面、反射系数）
+
+=== `create_buffer_references()`
+
+使用“缓冲引用”组织访问：在一个描述缓冲中存储各模型缓冲的地址，以便在着色器中按命中实例直接访问：
+
+[,cpp]
+----
+struct ObjBuffers { uint64_t vertices; uint64_t indices; uint64_t materials; uint64_t materialIndices; };
+layout(set = 0, binding = 3) buffer _scene_desc { ObjBuffers i[]; } scene_desc;
+...
+ObjBuffers obj = scene_desc.i[gl_InstanceCustomIndexEXT];
+----
+
+并为各地址声明引用类型：
+
+[,glsl]
+----
+layout(buffer_reference, scalar) buffer Vertices {Vertex v[];};
+layout(buffer_reference, scalar) buffer Indices {uvec3 i[];};
+layout(buffer_reference, scalar) buffer Materials {WaveFrontMaterial m[];};
+layout(buffer_reference, scalar) buffer MatIndices {int i[];};
+----
+
+`gl_InstanceCustomIndexEXT` 用于标识 BLAS 实例（参见 `create_blas_instance`）。
+
+=== `create_bottom_level_acceleration_structure()`
+
+为每个几何体构建 BLAS（示例包括：面、立方体、镜面立方体），TLAS 用不同变换矩阵实例化 BLAS。可一次性构建并压缩 BLAS（`VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR`）。
+
+=== `create_top_level_acceleration_structure()`
+
+TLAS 嵌入多个 BLAS，可复用同一 BLAS 并赋予不同变换（`create_scene()` 中示例）。在着色器侧通过 `gl_InstanceCustomIndexEXT` 识别 BLAS。
+
+image::./img2.png[]
+
+== 光线追踪管线
+
+相比基础示例，增加第二个 miss 着色器模块用于阴影射线。CH 中射向光源方向的射线若命中任何物体则判定为阴影。为加速：
+- 终止于首次命中（`TerminateOnFirstHit`）
+- 跳过 CH（`SkipClosestHitShader`）
+- 使用简单布尔载荷（`isShadowed`）
+
+== 反射
+
+不提高 `maxPipelineRayRecursionDepth`，而是在 CH 中将下一次射线的原点/方向存入 payload，由 RG 阶段发射新射线，实现非递归反射，避免在 CH 递归调用 `traceRayEXT` 时保存大量状态。
+
+示例 payload：
+
+[,cpp]
+----
+struct hitPayload {
+    vec3 radiance;
+    vec3 attenuation;
+    int  done;
+    vec3 rayOrigin;
+    vec3 rayDir;
+};
+----
+
+- `radiance` 为当前命中点的辐射乘以衰减；初始衰减为 1，材质光泽度会降低后续衰减；
+- `done` 由 miss 着色器设置，指示射线结束；
+- 原点初始为摄像机位置，随后替换为命中点；方向初始为摄像机方向，随后按镜面反射方向更新；
+
+RG 中将递归次数上限设为 64（可调），并可据衰减阈值提前退出。
+
+== 光线管线示意
+
+image::./img3.png[]
+
+== 参考教程
+
+更多关于递归限制的说明参考 nvpro 的“ray_tracing_reflections”。超出管线或设备递归上限会导致未定义行为。

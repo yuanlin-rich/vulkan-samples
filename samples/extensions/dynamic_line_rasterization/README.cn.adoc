@@ -1,0 +1,68 @@
+////
+- Copyright (c) 2023-2025, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 动态线光栅化
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码可在 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/dynamic_line_rasterization[Khronos Vulkan samples GitHub 仓库] 中找到。
+endif::[]
+
+
+image::./screenshot.png[]
+
+== 概述
+
+本示例演示了与动态线光栅化相关的多个扩展中的功能。这些功能可用于开发 CAD 应用。
+
+* 来自 `VK_EXT_line_rasterization` 扩展：
+** `vkCmdSetLineStippleEXT` —— 设置线段的点划线（stipple）图案。
+* 来自 `VK_EXT_extended_dynamic_state3` 扩展：
+** `vkCmdSetPolygonModeEXT` —— 设置定义的图元应如何进行光栅化。
+** `vkCmdSetLineRasterizationModeEXT` —— 设置线段的光栅化算法。
+** `vkCmdSetLineStippleEnableEXT` —— 切换是否对线段启用点划线。
+* 同时也来自核心 Vulkan：
+** `vkCmdSetLineWidth` —— 设置线宽。
+** `vkCmdSetPrimitiveTopologyEXT` —— 定义正在绘制的图元类型。
+
+== 示例说明
+
+“动态线光栅化”包含一个线框立方体，用户可以修改其外观。立方体的边与填充在同一个管线中渲染，但使用不同的索引集合。通过 `vkCmdSetPrimitiveTopologyEXT` 和 `vkCmdSetPolygonModeEXT` 来改变它们的渲染方式。
+
+用户可以修改线宽（`vkCmdSetLineWidth`），并选择线段的绘制算法（`vkCmdSetLineRasterizationModeEXT`）。本示例还展示了对线段应用点划线的能力。点划线由两个变量定义：
+
+** `lineStipplePattern` —— 一个 `uint16_t`，其中每一位表示线上的一个点是否着色（1）或透明（0）。
+** `lineStippleFactor` —— 一个因子，用于确定单个图案位影响多少个连续的点。
+
+示例还包含一个在立方体下方渲染的网格，使用不同的管线。该网格体现了另一种基于片段着色器的线光栅化方法。因此，用户不能修改网格线的外观。
+
+== 致谢
+
+无限网格着色器基于 https://asliceofrendering.com/scene%20helper/2020/01/05/InfiniteGrid/[asliceofrendering.com] 博客中的代码。
+
+== 文档链接
+
+https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetLineStippleEXT.html
+
+https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetPolygonModeEXT.html
+
+https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetLineRasterizationModeEXT.html
+
+https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetLineStippleEnableEXT.html
+
+https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetLineWidth.html

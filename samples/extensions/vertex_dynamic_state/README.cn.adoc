@@ -1,0 +1,194 @@
+////
+- Copyright (c) 2022-2023, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 顶点输入动态状态（Vertex input dynamic state）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/vertex_dynamic_state[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/sample.png[Sample]
+
+== 概览
+
+`VK_EXT_vertex_input_dynamic_state` 扩展允许在存在不同绑定与/或属性描述的情况下，避免为每种输入定义创建多条管线。
+
+该扩展改变了属性与绑定的管理方式：不再在管线创建时静态指定，而是允许在每次绘制前调用函数动态设置属性与绑定。
+
+下表比较了常规（静态）顶点输入与动态顶点输入的差异：
+
+|===
+| 顶点输入静态状态 | 顶点输入动态状态
+
+| dynamic_state = {}
+| dynamic_state = \{VK_DYNAMIC_STATE_VERTEX_INPUT_EXT}
+
+| pVertexInputState = &vertex_input_state
+| pVertexInputState = VK_NULL_HANDLE
+
+| vkCreateGraphicsPipelines(model1) + vkCreateGraphicsPipelines(model2)
+| vkCreateGraphicsPipelines(model)
+
+| draw(model1, pipeline1) + draw(model2, pipeline2)
+| vertex_bindings_description.stride  = sizeof(Vertex1);
++ vertex_attribute_description.offset = offsetof(Vertex1, param);
++ vkCmdSetVertexInputEXT(&vertex1_params) + draw(model1, pipeline) + vertex_bindings_description.stride  = sizeof(Vertex2);
++ vertex_attribute_description.offset = offsetof(Vertex2, param);
++ vkCmdSetVertexInputEXT(&vertex2_params) + draw(model2, pipeline)
+|===
+
+== 管线
+
+在传统方式下，开发者需要为“顶点输入数据不同”的模型分别创建多条管线，并在 `VkGraphicsPipelineCreateInfo` 中引用对应的顶点输入状态，如下所示：
+
+[,C++]
+----
+  // 第一条管线的顶点数据
+  // 绑定描述
+  std::vector<VkVertexInputBindingDescription> vertex_input_bindings_1 = {
+      vkb::initializers::vertex_input_binding_description(
+          0, sizeof(Vertex1), VK_VERTEX_INPUT_RATE_VERTEX),
+  };
+
+  // 属性描述
+  std::vector<VkVertexInputAttributeDescription> vertex_input_attributes_1 = {
+    vkb::initializers::vertex_input_attribute_description(
+        0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0),                  // Position
+    vkb::initializers::vertex_input_attribute_description(
+        0, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex1, normal)),  // Normal
+
+    VkPipelineVertexInputStateCreateInfo vertex_input_state_1 =
+      vkb::initializers::pipeline_vertex_input_state_create_info();
+    vertex_input_state_1.vertexBindingDescriptionCount = static_cast<uint32_t>(vertex_input_bindings_1.size());
+    vertex_input_state_1.pVertexBindingDescriptions = vertex_input_bindings_1.data();
+
+    vertex_input_state_1.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertex_input_attributes_1.size());
+    vertex_input_state_1.pVertexAttributeDescriptions = vertex_input_attributes_1.data();
+
+    graphics_create_info_1.pVertexInputState = &vertex_input_state_1;
+
+  vkCreateGraphicsPipelines(get_device().get_handle(), VK_NULL_HANDLE, 1,
+                            &graphics_create_info, VK_NULL_HANDLE, &pipeline1);
+
+  // 第二条管线的顶点数据
+  // 绑定描述
+  std::vector<VkVertexInputBindingDescription> vertex_input_bindings_2 = {
+      vkb::initializers::vertex_input_binding_description(
+          0, sizeof(Vertex2), VK_VERTEX_INPUT_RATE_VERTEX),
+  };
+
+  // 属性描述
+  std::vector<VkVertexInputAttributeDescription> vertex_input_attributes_2 = {
+    vkb::initializers::vertex_input_attribute_description(
+        0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0),                  // Position
+    vkb::initializers::vertex_input_attribute_description(
+        0, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex2, normal)),  // Normal（与 vertex_input_attributes_1 偏移不同）
+
+    VkPipelineVertexInputStateCreateInfo vertex_input_state_2 =
+      vkb::initializers::pipeline_vertex_input_state_create_info();
+    vertex_input_state_1.vertexBindingDescriptionCount = static_cast<uint32_t>(vertex_input_bindings_2.size());
+    vertex_input_state_2.pVertexBindingDescriptions = vertex_input_bindings_2.data();
+
+    vertex_input_state_2.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertex_input_attributes_2.size());
+    vertex_input_state_2.pVertexAttributeDescriptions = vertex_input_attributes_2.data();
+
+    graphics_create_info_2.pVertexInputState = &vertex_input_state_2;
+
+    vkCreateGraphicsPipelines(get_device().get_handle(), VK_NULL_HANDLE, 1,
+                              &graphics_create_info_2, VK_NULL_HANDLE, &pipeline2);
+
+    draw_model(model1, pipeline1);
+    draw_model(model2, pipeline2);
+  };
+----
+
+而在动态顶点输入状态下，可通过在 `draw_model` 前调用 `vkCmdSetVertexInputEXT` 动态更改“顶点绑定与属性描述”，从而减少管线数量。该扩展将两类结构升级：
+
+- `VkVertexInputBindingDescription` → `VkVertexInputBindingDescription2EXT`
+- `VkVertexInputAttributeDescription` → `VkVertexInputAttributeDescription2EXT`
+
+下面示例展示两套不同的顶点输入数据结构 `Vertex` 与 `SampleVertex`（第一模型从资源加载，第二模型在代码中直接构造，二者顶点结构不同）：
+
+[,C++]
+----
+  VkVertexInputBindingDescription2EXT   vertex_bindings_description_ext = {
+  vkb::initializers::vertex_input_binding_description2ext(
+	    0,
+	    sizeof(Vertex),
+	    VK_VERTEX_INPUT_RATE_VERTEX,
+	    1);
+  }
+	VkVertexInputAttributeDescription2EXT vertex_attribute_description_ext[2] = {
+  vkb::initializers::vertex_input_attribute_description2ext(
+	    0,
+	    0,
+	    VK_FORMAT_R32G32B32_SFLOAT,
+	    offsetof(Vertex, pos)),
+  vkb::initializers::vertex_input_attribute_description2ext(
+	    0,
+	    1,
+	    VK_FORMAT_R32G32B32_SFLOAT,
+	    offsetof(Vertex, normal);
+  }
+
+    graphics_create_info.pVertexInputState = nullptr;
+
+    vkCreateGraphicsPipelines(get_device().get_handle(), VK_NULL_HANDLE, 1,
+                              &graphics_create_info, VK_NULL_HANDLE, &pipeline);
+
+/* 第一套（Vertex 结构） */
+		vertex_bindings_description_ext[0].stride  = sizeof(Vertex);
+		vertex_attribute_description_ext[1].offset = offsetof(Vertex, normal);
+		vkCmdSetVertexInputEXT(draw_cmd_buffer,
+		                       static_cast<uint32_t>(vertex_bindings_description_ext.size()),
+		                       vertex_bindings_description_ext.data(),
+		                       static_cast<uint32_t>(vertex_attribute_description_ext.size()),
+		                       vertex_attribute_description_ext.data());
+    draw_model(model1, pipeline);
+
+/* 第二套（SampleVertex 结构） */
+		vertex_bindings_description_ext[0].stride  = sizeof(SampleVertex);
+		vertex_attribute_description_ext[1].offset = offsetof(SampleVertex, normal);
+		vkCmdSetVertexInputEXT(draw_cmd_buffer,
+		                       static_cast<uint32_t>(vertex_bindings_description_ext.size()),
+		                       vertex_bindings_description_ext.data(),
+		                       static_cast<uint32_t>(vertex_attribute_description_ext.size()),
+		                       vertex_attribute_description_ext.data());
+    draw_model(model2, pipeline);
+----
+
+== 启用扩展
+
+顶点输入动态状态属于扩展，因此需查询每个设备的可用性。设备扩展名为 `VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME`；此外需启用实例扩展 `VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME`：
+
+[,C++]
+----
+	add_instance_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+	add_device_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+----
+
+并在 `VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT` 中启用对应特性：
+
+[,C++]
+----
+typedef struct VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           vertexInputDynamicState;
+} VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT;
+----

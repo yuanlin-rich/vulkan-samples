@@ -1,0 +1,26 @@
+////
+- Copyright (c) 2019-2023, The Khronos Group
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 动态统一缓冲（Dynamic Uniform buffers）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/dynamic_uniform_buffers[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+使用动态统一缓冲来渲染多个对象：将各自的矩阵存储在单一的统一缓冲对象（UBO）中，并通过动态偏移进行寻址。

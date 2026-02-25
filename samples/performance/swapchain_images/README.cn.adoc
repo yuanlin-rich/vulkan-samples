@@ -1,0 +1,63 @@
+////
+- Copyright (c) 2019-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 选择正确数量的交换链图像（Choosing the right number of swapchain images）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/swapchain_images[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+Vulkan 允许应用对交换链图像数量进行一定程度的控制。本示例分析可选方案及其性能影响。
+
+== 选择图像数量
+
+图像数量由应用与平台共同决定：应用在 `vkCreateSwapchainKHR` 的 `minImageCount` 指定最小值；实际创建数量可用 `vkGetSwapchainImagesKHR` 查询。设置前先通过 `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` 获取 `VkSurfaceCapabilitiesKHR` 的 `minImageCount/maxImageCount` 边界。移动端经验：`minImageCount` 常为 2，`maxImageCount` 足够大但仍需检查。
+
+常见选择：2（双缓冲）、3（三缓冲）。实际数量还受呈现模式影响。
+
+== 选择呈现模式
+
+通过 `vkGetPhysicalDeviceSurfacePresentModesKHR` 查询。移动端满足 VSync 的模式通常只有 `VK_PRESENT_MODE_FIFO_KHR` 与 `VK_PRESENT_MODE_MAILBOX_KHR`：
+- FIFO：呈现请求排队，队列满时获取需等待；自动锁 60FPS；
+- MAILBOX：仅保留一个请求，新请求会替换旧图像；常见 4 张图，提交不阻塞，适合低延迟但增加 CPU/GPU 负载；
+
+如非必要，移动端建议用 FIFO 降负载。FIFO 下图像数通常等于 `minImageCount`。
+
+== 双缓冲 or 三缓冲
+
+Android VSync 为 60FPS（~16ms）。双缓冲在帧时 ≤16ms 时工作良好；若帧时 >16ms，将出现“系统空转”，把帧率限制在 30FPS，即便应用可达 ~50FPS。三缓冲下总有已就绪图像可呈现，GPU 可无阻塞地开始下一帧。
+
+== 示例
+
+示例可在双/三缓冲间切换（Mali G72）：三缓冲时 Sponza 稳定 60FPS；切换到双缓冲帧率降至 30FPS。若 CPU/GPU 帧时接近 16ms，切到双缓冲后短暂仍 60FPS，但一旦略超时就会错过 VSync 并突降帧率。为避免 VSync 限制，推荐三缓冲。
+
+== 最佳实践
+
+- 建议：
+  - 确保 `minImageCount` 在 `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` 的合法范围内；
+  - 使用 `FIFO` 降低 CPU/GPU 负载；
+  - 使用三缓冲最大化性能；
+- 避免：
+  - 非必要使用 `MAILBOX`（除非明确追求更低输入延迟）；
+  - 默认使用双缓冲（若需 30FPS 限帧省电，可在 CPU 侧限速并保留三缓冲）；
+- 影响：
+  - 双缓冲在错过 VSync 时将卡在下一次 VSync；
+- 调试：
+  - 通过 `vkGetSwapchainImagesKHR` 检查创建的图像数；若仅 2 张且设备允许，提升 `minImageCount` 至 3。

@@ -1,0 +1,72 @@
+////
+- Copyright (c) 2023-2024, The Khronos Group
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 交换链重建（Swapchain Recreation）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/swapchain_recreation[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+本示例实现了呈现资源与交换链重建的最佳实践（例如窗口大小变化或呈现模式切换）。
+
+在启用 VK_EXT_swapchain_maintenance1 之前，无法直接获知与呈现操作关联的信号量何时可回收，或退役的交换链何时可销毁。这两类操作都依赖于得知“呈现引擎是否已在该呈现作业中获取了这些资源的引用”，但没有明确指示。
+
+该示例采用了一种变通方案：使用 vkAcquireNextImageKHR 发出的栅栏（fence）来判断“与同一图像索引相关的前一次呈现作业”何时完成。通常这个时刻远晚于资源可以释放的时刻。
+
+为简单起见，引入如下缩写：
+
+- PE：呈现引擎（Presentation Engine）
+- ANI：vkAcquireNextImageKHR
+- QS：vkQueueSubmit
+- QP：vkQueuePresentKHR
+- W：等待（Wait）
+- S：信号（Signal）
+- R：渲染（Render）
+- P：呈现（Present）
+- SN：信号量 N
+- IN：交换链图像 N
+- FN：栅栏 N
+
+若两次 ANI 返回相同索引：
+
+CPU：ANI  ... QS   ... QP         ANI  ... QS   ... QP
+     S:S1     W:S1     W:S2       S:S3     W:S3     W:S4
+     S:F1     S:S2                S:F2     S:S4
+GPU：           <------ R ------>            <------ R ------>
+ PE：                            <-- P -->                    <-- P -->
+
+可得：
+
+- F2 已发出信号 → PE 已将图像交回应用 → PE 不再呈现该图像（首次 P 已完成）→ PE 已完成等待 S2；此时即可销毁/回收 S2。
+
+实现方法：维护“呈现历史”，记录每次呈现所使用的等待信号量，并为其关联一个用于判断该信号量何时可销毁的栅栏。由于该栅栏在 QP 时未知，先将该呈现记录入历史（暂不有关联栅栏）；当 ANI 再次返回同一索引时，将该 ANI 的栅栏关联到该索引上一次的 QP。
+
+每次呈现后，检查历史；凡栅栏已发出信号的呈现记录，执行清理。
+
+== 交换链重建
+
+重建交换链时，所有旧图像最终被释放并创建新图像（可能数量与呈现模式不同）。对于旧交换链，无法再依靠后续 ANI 来判断“此前呈现的信号量何时可销毁”，也无法知晓“旧交换链本身何时可销毁”。
+
+解决办法：将旧交换链及其剩余呈现信号量的销毁推迟到“新交换链的第一次呈现所对应的信号量可销毁”的时刻。因为一旦新交换链的首次呈现信号量可销毁，意味着新交换链的首次呈现已完成，旧交换链已不再呈现。
+
+注意：交换链可能在没有第二次获取（acquire）的情况下被重建，意味着在重建过程中可能还存在待销毁的旧交换链。此时需将两个旧交换链的销毁均延后到“新交换链的第一个 QP 处理完成”时。若应用持续高速改变窗口大小，旧交换链可能累积，直至改变停止才会释放。
+
+== VK_EXT_swapchain_maintenance1
+
+启用该扩展后，上述变通均不再需要。每个 QP 都可关联一个栅栏，用于判断与其相关的信号量何时可回收。旧交换链也可按原先时机销毁。

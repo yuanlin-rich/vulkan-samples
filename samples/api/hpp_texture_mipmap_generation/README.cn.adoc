@@ -1,0 +1,149 @@
+////
+- Copyright (c) 2022-2024, The Khronos Group
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+:doctype: book
+:pp: {plus}{plus}
+
+= 使用 Vulkan-Hpp 的运行时纹理 mip-map 生成（Run-time mip-map generation with Vulkan-Hpp）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/hpp_texture_mipmap_generation[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+说明：这是 API 示例 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/texture_mipmap_generation[Texture mipmap generation] 的 HPP 版本，展示如何使用由 vulkan.hpp 提供的 Vulkan C{pp} 绑定。
+
+== 概览
+
+在运行时，从基础图像通过 Image Blit 与恰当的图像屏障，生成完整的纹理 mip 链。与直接加载离线生成的 mip-map 不同，该示例演示在运行时生成 mip 链的流程。
+
+对于如反射用的立方体贴图或其他渲染到纹理的效果，这种在运行时生成 mip 的技术常被采用。为运行时生成的纹理提供 mip-map 在图像稳定性与性能方面均有好处：
+
+- 没有 mip 映射时，图像（特别是高频纹理和如镜面等分量）会变得噪声更重；
+- 使用 mip 映射会因缓存而获得更高性能。
+
+示例在开始阶段为单个纹理生成一次 mip 链，但也可在正常帧渲染过程中为动态纹理生成。部分 GPU 提供“异步传输队列”，可用于后台执行此类操作；可通过仅设置 `vk::QueueFlagBits::eTransfer` 的队列族进行检测。
+
+== 对比
+
+- 关闭 mip 映射：
+
+image::samples/api/texture_mipmap_generation/images/mip_mapping_off.jpg[Off,512px]
+
+- 使用双线性过滤的 mip 映射：
+
+image::samples/api/texture_mipmap_generation/images/mip_mapping_bilinear.jpg[Bilinear,512px]
+
+- 使用各向异性过滤的 mip 映射：
+
+image::samples/api/texture_mipmap_generation/images/mip_mapping_anisotropic.jpg[Anisotropic,512px]
+
+== 要求
+
+使用 `vk::CommandBuffer::blitImage` 从上一 mip 级别下采样到下一 mip 级别，要求纹理格式支持 `vk::FormatFeatureFlagBits::eBlitSrc` 与 `vk::FormatFeatureFlagBits::eBlitDst`。若不支持，则无法使用 blit，只能选择其他格式或通过自定义着色器生成 mip 级别。示例使用 `vk::Format::eR8G8B8A8Srgb`，在多数实现中通常支持上述标志。可先用 `vk::PhysicalDevice::getFormatProperties` 检查格式是否支持。
+
+== 关注点
+
+=== 图像设置
+
+虽然初始只上传第 0 个 mip 级别，图像创建时应指定所需的 mip 级别数量；数量依据最大尺寸计算：
+
+[,cpp]
+----
+texture.mip_levels = static_cast<uint32_t>(floor(log2(std::max(texture.width, texture.height))) + 1);
+----
+
+随后传入图像创建信息：
+
+[,cpp]
+----
+vk::ImageCreateInfo image_create_info({},
+                                      vk::ImageType::e2D,
+                                      format,
+                                      vk::Extent3D(texture.extent, 1),
+                                      texture.mip_levels,
+...
+----
+
+指定 mip 级别数量是必须的，以便为图像分配正确数量的内存（`vk::Device::allocateMemory`）。
+
+=== 上传基础 mip 级别
+
+将磁盘加载的图像数据拷贝到新图像，作为 mip 链的基础：
+
+[,cpp]
+----
+vk::BufferImageCopy buffer_copy_region({}, {}, {}, {vk::ImageAspectFlagBits::eColor, 0, 0, 1}, {}, vk::Extent3D(texture.extent, 1));
+copy_command.copyBufferToImage(staging_buffer, texture.image, vk::ImageLayout::eTransferDstOptimal, buffer_copy_region);
+----
+
+=== 准备基础 mip 级别
+
+若要从基础 mip 级别 blit，需要插入图像内存屏障，将其布局转为 `vk::ImageLayout::eTransferSrcOptimal`：
+
+[,cpp]
+----
+image_memory_barrier = vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferWrite,
+                                              vk::AccessFlagBits::eTransferRead,
+                                              vk::ImageLayout::eTransferDstOptimal,
+                                              vk::ImageLayout::eTransferSrcOptimal,
+                                              VK_QUEUE_FAMILY_IGNORED,
+                                              VK_QUEUE_FAMILY_IGNORED,
+                                              texture.image,
+                                              {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+copy_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, image_memory_barrier);
+----
+
+=== 生成 mip 链
+
+两种方法：
+- 从 n-1 级 blit 到 n 级（示例采用）；
+- 始终从基础图像 blit 到所有级别。
+
+注意：图像 blit（与复制相同）在命令缓冲内完成，需提交并同步（例如使用 `vk::Fence`）。随后循环各级别，针对每次从 i-1 到 i 的 blit 准备 `vk::ImageBlit`，并在写入前将目标 mip 的布局转为 `vk::ImageLayout::eTransferDstOptimal`；完成 blit 后再将其转为 `vk::ImageLayout::eTransferSrcOptimal` 作为下一次的源。
+
+=== 最终图像布局转换
+
+循环结束后，将所有级别转为实际使用布局（本示例为 `vk::ImageLayout::eShaderReadOnlyOptimal`），由于各级都处于 `vk::ImageLayout::eTransferSrcOptimal`，可用单个屏障完成：
+
+[,cpp]
+----
+image_memory_barrier = vk::ImageMemoryBarrier(vk::AccessFlagBits::eTransferRead,
+                                              vk::AccessFlagBits::eShaderRead,
+                                              vk::ImageLayout::eTransferSrcOptimal,
+                                              vk::ImageLayout::eShaderReadOnlyOptimal,
+                                              VK_QUEUE_FAMILY_IGNORED,
+                                              VK_QUEUE_FAMILY_IGNORED,
+                                              texture.image,
+                                              {vk::ImageAspectFlagBits::eColor, 0, texture.mip_levels, 0, 1});
+copy_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, image_memory_barrier);
+----
+
+=== 图像视图创建
+
+图像视图也需设定使用的 mip 级别数量：
+
+[,cpp]
+----
+vk::ImageViewCreateInfo image_view_create_info({},
+                                               texture.image,
+                                               vk::ImageViewType::e2D,
+                                               format,
+                                               {vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eG, vk::ComponentSwizzle::eB, vk::ComponentSwizzle::eA},
+                                               {vk::ImageAspectFlagBits::eColor, 0, texture.mip_levels, 0, 1});
+texture.view = get_device()->get_handle().createImageView(image_view_create_info);
+----

@@ -1,0 +1,65 @@
+////
+- Copyright (c) 2024-2026, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 张量与数据图（Tensor and Data Graph）
+
+== 概览
+
+本目录下的示例演示 *VK_ARM_tensors* 与 *VK_ARM_data_graph* 扩展的用法。其中 *VK_ARM_data_graph* 引入了“数据图管线（data graph pipeline）”，这是所有示例都会使用的一类新 Vulkan 管线类型，专为执行可由 SPIR-V 模块描述的数据流图而设计。与计算管线类似，它们通过描述符集访问外部资源、在创建时编译，并支持管线缓存与离线二进制。
+
+数据图管线可自然融入现有 Vulkan 生态，复用熟悉的 SPIR-V 工具链与工作流，特别适合将一系列计算管线替换为“数据图”的机器学习工作负载。
+
+为展示其用法，我们给出了基于数据图管线的样例，说明如何搭建数据图管线并执行简单神经网络。这些示例覆盖了关键特性：图常量、SPIR-V 编写、张量创建、与计算着色器的交互以及通过别名内存避免不必要拷贝。
+
+本目录包含的示例：
+
+* xref:./simple_tensor_and_data_graph/README.adoc[简单的张量与数据图]
+* xref:./graph_constants/README.adoc[图常量]
+* xref:./compute_shaders_with_tensors/README.adoc[结合张量的计算着色器]
+
+== 环境准备
+
+在构建与运行这些示例前需要进行一些准备工作。
+
+NOTE: 这些示例及其依赖可在 Windows 与 Linux 上构建与运行，目前不支持其他操作系统。
+
+=== 更新 Vulkan SDK
+
+为编译示例使用的着色器代码，需要较新的 Vulkan SDK。示例已在 1.4.321 版本上测试通过。
+
+=== 启用仿真层（Graph & Tensor）
+
+注意：仅当设备不支持 *VK_ARM_tensors* 与 *VK_ARM_data_graph* 时，才需要 Vulkan 的“ML 仿真层”。
+
+请从 GitHub 安装并启用 link:https://github.com/arm/ai-ml-emulation-layer-for-vulkan[ML Emulation Layer for Vulkan]。请根据所用平台在其 README.md 中的说明启用仿真层。发布页提供了 Windows 与 Linux 的预编译版本，也可按构建指南从源码构建。
+
+或者，可使用 Vulkan SDK 中的 Vulkan Configurator 工具（若未安装可从 link:https://vulkan.lunarg.com/[Vulkan SDK] 网站获取）。安装后打开 Vulkan Configurator，进入“Vulkan Layers Location”页，点击加号追加用户层路径并指向已构建层所在目录。注意需启用两个独立的层，若位于不同目录则需分别添加。
+
+注意：建议在运行这些样例时禁用验证层（validation layer），因为这些新扩展尚未被支持。
+
+image::./loading_layers.png[Loading Layers Completed]
+
+上述操作应当会在“Vulkan Loader Management”页看到新增的层。请确保 Graph 层位于 Tensor 层之上。
+
+image::./verify_layers.png[VK Layers]
+
+如果运行示例时收到如下错误：
+----
+ Requested required feature <VkPhysicalDeviceTensorFeaturesARM::shaderTensorAccess> is not supported
+----
+很可能是仿真层未正确启用。请按上述步骤确认层已加载并启用，且在启动示例可执行文件前 Vulkan Configurator 已运行。某些系统在以管理员权限运行时可能与仿真层不兼容，如遇问题请尝试在非管理员权限下运行。

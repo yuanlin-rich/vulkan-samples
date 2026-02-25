@@ -1,0 +1,256 @@
+////
+- Copyright (c) 2023-2025, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 描述符缓冲区（Descriptor buffers）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源代码可在 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/descriptor_buffer_basic[Khronos Vulkan Samples GitHub 仓库] 中找到。
+endif::[]
+
+== 概述
+
+在 Vulkan 中绑定与管理描述符（descriptor）对应用程序和驱动而言都可能相当复杂。
+借助扩展 https://www.khronos.org/registry/vulkan/specs/latest/html/vkspec.html#VK_ext_descriptor_buffer[`VK_EXT_descriptor_buffer`]，这一接口被简化，并且更贴近硬件查看描述符的方式。
+它也简化了编程模型，因为你不再需要预先创建描述符池。
+
+本示例展示如何使用该扩展：通过新的描述符创建与绑定方式，使用不同的 uniform 缓冲与图像渲染多个对象。
+
+== 已废弃的描述符绑定方式
+
+在 Vulkan 中创建与绑定描述符需要多个步骤与函数调用。
+
+归根结底，描述符只是内存；`VkDescriptorPool` 之类的对象是抽象概念，并不直接映射到硬件。
+在多数实现上，`vkCreateDescriptorPool` 除了进行一次内存分配外并不会做更多事情。
+`vkAllocateDescriptorSets` 本质上同样只是某种内存分配，而 `vkUpdateDescriptorSets` 则负责把描述符拷贝到该缓冲中。
+
+借助 `VK_EXT_descriptor_buffer` 提供的精简描述符设置，API 与上述事实更为贴合，并去除了以下函数的需求：
+
+* vkCreateDescriptorPool
+* vkAllocateDescriptorSets
+* vkUpdateDescriptorSets
+* vkCmdBindDescriptorSets
+
+Vulkan 描述符体系中的其他概念（如描述符集布局与管线布局）仍然使用，未被废弃。
+
+== 新方式
+
+`VK_EXT_descriptor_buffer` 用“资源描述符缓冲区（resource descriptor buffer）”取代了传统流程。
+这些缓冲区以 GPU 可直接读取的方式存储描述符。
+应用只需将描述符写入这些缓冲区；随后在记录命令缓冲时，像绑定其他缓冲一样将其绑定即可。
+
+为便于理解接下来的代码，先看一下着色器接口：
+
+[,glsl]
+----
+// Vertex shader
+layout (set = 0, binding = 0) uniform UBOScene {
+    mat4 projection;
+    mat4 view;
+} uboCamera;
+
+layout (set = 1, binding = 0) uniform UBOModel {
+    mat4 local;
+} uboModel;
+
+// Fragment shader
+layout (set = 2, binding = 0) uniform sampler2D samplerColorMap;
+----
+
+我们使用三个描述符集，每个集合只有一个绑定。
+
+=== 创建描述符缓冲区
+
+现在描述符被存放在（并从）内存中访问，因此不再需要采用旧方法创建专用的 Vulkan 对象，而是创建用于存储描述符的缓冲区。
+
+该扩展引入两类描述符：用于缓冲区的资源描述符（如 uniform buffer、shader storage buffer），以及采样器/采样器-图像复合描述符。
+本示例会用到这两类，因此我们创建两个不同的缓冲区。
+
+像 Vulkan 中常见的那样，不同实现对大小与对齐有不同要求。通过 `vkCmdSetDescriptorBufferOffsetsEXT` 设置描述符缓冲偏移时的对齐要求由 `VkPhysicalDeviceDescriptorBufferPropertiesEXT::descriptorBufferOffsetAlignment` 定义。在示例开头我们将该信息获取到 `descriptor_buffer_properties`。
+
+[,cpp]
+----
+VkPhysicalDeviceProperties2KHR device_properties{};
+descriptor_buffer_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT;
+device_properties.sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR;
+device_properties.pNext            = &descriptor_buffer_properties;
+vkGetPhysicalDeviceProperties2KHR(get_device().get_gpu().get_handle(), &device_properties);
+----
+
+因此，为计算用于存储描述符的实际缓冲大小，我们需要获取各个 set 布局的大小，并按 `VkPhysicalDeviceDescriptorBufferPropertiesEXT::descriptorBufferOffsetAlignment` 对齐。
+我们还需要获取某个 set 布局中各描述符绑定的偏移。根据 Vulkan 规范，set 布局的大小至少等于其包含的描述符绑定大小之和，但可能更大；同时规范并不保证描述符绑定在 set 布局内的内存排布（例如，第一个绑定可能从布局内存的起始位置开始，也可能因为实现放入元数据而有非 0 的起始偏移）。
+
+[,cpp]
+----
+// 获取 set 布局的大小。
+vkGetDescriptorSetLayoutSizeEXT(get_device().get_handle(), uniform_binding_descriptor.layout, &uniform_binding_descriptor.size);
+vkGetDescriptorSetLayoutSizeEXT(get_device().get_handle(), image_binding_descriptor.layout, &image_binding_descriptor.size);
+
+// 调整 set 布局大小以满足对齐要求。
+uniform_binding_descriptor.size = aligned_size(uniform_binding_descriptor.size, descriptor_buffer_properties.descriptorBufferOffsetAlignment);
+image_binding_descriptor.size   = aligned_size(image_binding_descriptor.size, descriptor_buffer_properties.descriptorBufferOffsetAlignment);
+
+// 获取描述符绑定在 set 布局中的偏移，因为描述符会按这些偏移放入布局。
+vkGetDescriptorSetLayoutBindingOffsetEXT(get_device().get_handle(), uniform_binding_descriptor.layout, 0u, &uniform_binding_descriptor.offset);
+vkGetDescriptorSetLayoutBindingOffsetEXT(get_device().get_handle(), image_binding_descriptor.layout, 0u, &image_binding_descriptor.offset);
+----
+
+使用 `VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT` 用途标志创建用于 uniform 缓冲的资源描述符缓冲区：
+
+[,cpp]
+----
+uniform_binding_descriptor.buffer = std::make_unique<vkb::core::Buffer>(get_device(),
+                                                                        (static_cast<uint32_t>(cubes.size()) + 1) * uniform_binding_descriptor.size,
+                                                                        VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                                        VMA_MEMORY_USAGE_CPU_TO_GPU);
+----
+
+为复合图像采样器创建描述符缓冲区时，额外添加 `VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT` 用途标志：
+
+[,cpp]
+----
+image_binding_descriptor.buffer = std::make_unique<vkb::core::Buffer>(get_device(),
+                                                                      static_cast<uint32_t>(cubes.size()) * image_binding_descriptor.size,
+                                                                      VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                                      VMA_MEMORY_USAGE_CPU_TO_GPU);
+----
+
+=== 将描述符写入缓冲区
+
+创建好相应缓冲区后，我们把实际的描述符写入这些缓冲，使其可被 GPU 访问。
+这通过 `vkGetDescriptorEXT` 完成。
+
+本示例使用一个全局 uniform 缓冲存储场景矩阵、每个对象一个 uniform 缓冲，以及每个对象一个复合图像采样器。
+
+对于资源描述符缓冲，我们可以直接把缓冲区的设备地址写入其中。
+无需使用“描述符对象”，因为 GPU 只需知道缓冲区的地址即可访问它们：
+
+[,cpp]
+----
+char *uniform_descriptor_buf_ptr = (char *) resource_descriptor_buffer->get_data();
+
+// 全局矩阵的 uniform 缓冲
+VkDescriptorAddressInfoEXT addr_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
+addr_info.address                    = uniform_buffers.scene->get_device_address();
+addr_info.range                      = uniform_buffers.scene->get_size();
+addr_info.format                     = VK_FORMAT_UNDEFINED;
+
+VkDescriptorGetInfoEXT buffer_descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+buffer_descriptor_info.type                = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+buffer_descriptor_info.data.pUniformBuffer = &addr_info;
+vkGetDescriptorEXT(get_device().get_handle(), &buffer_descriptor_info, descriptor_buffer_properties.uniformBufferDescriptorSize, uniform_descriptor_buf_ptr);
+
+// 每个立方体的 uniform 缓冲
+// 通过指针偏移与对齐来把数据写入描述符缓冲
+for (size_t i = 0; i < cubes.size(); i++)
+{
+	VkDescriptorAddressInfoEXT cube_addr_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_ADDRESS_INFO_EXT};
+	cube_addr_info.address                    = cubes[i].uniform_buffer->get_device_address();
+	cube_addr_info.range                      = cubes[i].uniform_buffer->get_size();
+	cube_addr_info.format                     = VK_FORMAT_UNDEFINED;
+
+	buffer_descriptor_info.data.pUniformBuffer = &cube_addr_info;
+	vkGetDescriptorEXT(get_device().get_handle(), &buffer_descriptor_info, descriptor_buffer_properties.uniformBufferDescriptorSize, uniform_descriptor_buf_ptr + (i + 1) * uniform_binding_descriptor.size + uniform_binding_descriptor.offset);
+}
+----
+
+对于复合图像采样器（或仅采样器），不能使用缓冲设备地址，因为实现需要更多信息，因此必须把实际描述符写入缓冲：
+
+[,cpp]
+----
+// 对于复合图像，需要把描述符写入描述符缓冲
+// 通过指针偏移与对齐来把数据写入描述符缓冲
+char *image_descriptor_buf_ptr = (char *) image_binding_descriptor.buffer->get_data();
+for (size_t i = 0; i < cubes.size(); i++)
+{
+	VkDescriptorImageInfo image_descriptor = create_descriptor(cubes[i].texture);
+
+	VkDescriptorGetInfoEXT image_descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT};
+	image_descriptor_info.type                       = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	image_descriptor_info.data.pCombinedImageSampler = &image_descriptor;
+	vkGetDescriptorEXT(get_device().get_handle(), &image_descriptor_info, descriptor_buffer_properties.combinedImageSamplerDescriptorSize, image_descriptor_buf_ptr + i * image_binding_descriptor.size + image_binding_descriptor.offset);
+}
+----
+
+=== 绑定缓冲区
+
+如前所述，我们不再使用 `vkCmdBindDescriptorSets` 绑定描述符集，而是使用 `vkCmdBindDescriptorBuffersEXT` 绑定（资源）描述符缓冲，并在接下来的绘制前用 `vkCmdSetDescriptorBufferOffsetsEXT` 在该缓冲中进行索引：
+
+[,cpp]
+----
+// 描述符缓冲绑定
+// 绑定 0 = uniform 缓冲
+VkDescriptorBufferBindingInfoEXT descriptor_buffer_binding_info[2]{};
+descriptor_buffer_binding_info[0].sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT;
+descriptor_buffer_binding_info[0].address = resource_descriptor_buffer->get_device_address();
+descriptor_buffer_binding_info[0].usage   = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
+// 绑定 1 = 图像
+descriptor_buffer_binding_info[1].sType   = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT;
+descriptor_buffer_binding_info[1].address = image_descriptor_buffer->get_device_address();
+descriptor_buffer_binding_info[1].usage   = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
+vkCmdBindDescriptorBuffersEXT(draw_cmd_buffers[i], 2, descriptor_buffer_binding_info);
+
+uint32_t     buffer_index_ubo   = 0;
+uint32_t     buffer_index_image = 1;
+
+// 全局矩阵（set 0）
+vkCmdSetDescriptorBufferOffsetsEXT(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &buffer_index_ubo, &buffer_offset);
+
+// 为每个模型设置并偏移到相应描述符
+for (size_t j = 0; j < cubes.size(); j++)
+{
+	// Uniform 缓冲（set 1）
+	// 模型 UBO 从 offset * (j + 1) 开始（+1 因为槽 0 是全局矩阵）
+	buffer_offset = (j + 1) * uniform_binding_descriptor.size;
+	vkCmdSetDescriptorBufferOffsetsEXT(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 1, 1, &buffer_index_ubo, &buffer_offset);
+	// 图像（set 2）
+	buffer_offset = j * image_binding_descriptor.size;
+	vkCmdSetDescriptorBufferOffsetsEXT(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 2, 1, &buffer_index_image, &buffer_offset);
+	draw_model(models.cube, draw_cmd_buffers[i]);
+}
+----
+
+结合我们的着色器接口，细节如下：
+
+更早之前，我们已把全局矩阵 uniform 缓冲的设备地址放在资源描述符缓冲的起始处。
+因此对 set 0，我们设置其指向 `buffer_offset = 0`：
+
+[,cpp]
+----
+vkCmdSetDescriptorBufferOffsetsEXT(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &buffer_index_ubo, &buffer_offset);
+----
+
+随后我们遍历示例中显示的所有立方体，并让描述符缓冲针对 set 1 指向下一个设备地址，偏移量按实现要求对齐：
+
+[,cpp]
+----
+vkCmdSetDescriptorBufferOffsetsEXT(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 1, 1, &buffer_index_ubo, &buffer_offset);
+----
+
+当对齐为 16（见 `VkPhysicalDeviceDescriptorBufferPropertiesEXT`）时，第一个立方体的 uniform 缓冲设备地址从资源描述符缓冲的第 16 字节开始，第二个立方体的则从第 32 字节开始。
+
+包含复合图像采样器描述符的描述符缓冲绑定到 set 2：
+
+[,cpp]
+----
+vkCmdSetDescriptorBufferOffsetsEXT(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 2, 1, &buffer_index_image, &buffer_offset);
+----
+
+== 着色器呢？
+
+借助描述符集布局与管线布局，Vulkan 将着色器接口与应用解耦。
+由于我们并未改变这些布局，只是改变了向 GPU 提供描述符的方式，因此*无需对着色器进行任何修改*。

@@ -1,0 +1,48 @@
+////
+- Copyright (c) 2019-2023, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 利用专用化常量（Utilizing Specialization Constants）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/specialization_constants[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+Vulkan 在运行时设置着色器内数值有多种方式，包括 UBO 与专用化常量。本示例比较二者及其性能影响。
+
+== 专用化常量 vs UBO
+
+UBO 是常见做法，运行时在执行前推送数据，发生于 `vkCreateGraphicsPipelines` 之后，因此编译器在编译期无法基于这些值做循环展开/删除死代码等优化；推常量同理。专用化常量在“创建管线前”设定，编译时即已知，使驱动编译器能删除未用代码、静态展开循环，从而减少片段周期、提升性能并缩小着色器体积。代价是需要在建管线前确定取值。
+
+== 示例
+
+示例提供单选项切换 UBO 与专用化常量。二者控制“场景光源数量”的 for 循环；使用专用化常量时编译器可静态展开。Mali G76 上示例的片段周期图显示：专用化常量带来约 4.4% 性能提升；在如 SSAO 等更复杂循环场景，收益更高（参考博文）。
+
+Mali Offline Compiler 可对比最短/最长路径；示例着色器在 UBO 下最短路径算术周期约 0.5，而专用化常量下约 0.3，显示控制流由 UBO 改为专用化常量的改进。
+
+== 最佳实践
+
+- 建议：
+  - 将控制流相关参数改为编译期“专用化常量”，便于完全剔除未用分支与静态展开；
+- 避免：
+  - 以 uniform 值参数化控制流；应为不同控制路径专门化各自着色器变体；
+- 影响：
+  - 若不使用专用化常量，着色器程序效率较低、性能下降；
+- 调试：
+  - 在 Mali 上用 Offline Compiler 分析代码变更对最短/最长路径的影响。

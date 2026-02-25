@@ -1,0 +1,123 @@
+////
+- Copyright (c) 2021-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= Vulkan 中的常量数据（Constant data in Vulkan）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/constant_data[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+:pp: {plus}{plus}
+
+== 概览
+
+Vulkan 提供多种方式向着色器传递“常量数据”。常见问题是“哪种最快？”——答案常常是“视情况而定”。不同厂商的最优路径可能不同，难有“一招通吃”。本示例通过交互切换不同方法并展示其性能差异，帮助在不同平台上评估选择。
+
+== 什么是常量数据？
+
+=== 引言
+
+常量数据是在管线中供着色计算使用的“全局参数”，如世界/视图/投影矩阵、光照参数等。区别于随调用变化的顶点输入等，常量数据在一次绘制调用内对所有着色器调用保持不变，可在阶段间共享。
+
+=== 着色器侧的常量数据
+
+常量数据以“全局变量”形式声明：`<layout> <storage> <type> <name>`。例如：
+
+[,glsl]
+----
+layout(location = 0) in vec4 position;
+layout(set = 0, binding = 0) uniform ConstantData { mat4 model; } constant_data;
+layout(location = 0) out vec4 o_pos;
+----
+
+- `in/out` 变量会在不同调用间变化，不宜用于常量；需明确 `layout(location)`；
+- `uniform` 与 `buffer` 分别对应 UBO 与 SSBO：UBO 只读，SSBO 可写（不总是常量，但可容纳更多数据）；
+- 通过“接口块”将同 storage 的全局变量打包：
+
+[,glsl]
+----
+layout(set = 0, binding = 0) uniform PerMeshData {
+    vec4 camera_position;
+    mat4 model_matrix;
+    vec3 mesh_color;
+} per_mesh_data;
+----
+
+=== Vulkan API 侧
+
+常量数据通常存入 `VkBuffer`，手动分配/绑定内存后写入，再通过描述符绑定进绘制调用。VMA 可简化内存管理。创建缓冲、UBO 的流程可参考 Vulkan 文档示例。
+
+== 方法概览
+
+- Push Constants（推常量）
+- Descriptor Sets（静态描述符集）
+- Dynamic Descriptor Sets（动态描述符集）
+- Update-after-bind Descriptor Sets（绑定后可更新）
+- Buffer array with dynamic indexing（缓冲数组 + 动态索引）
+- Inline uniform block（见规范）
+- Push descriptors（见规范）
+
+本教程覆盖前五种。
+
+== 示例说明
+
+场景包含 1856 个网格（约 475KB 网格数据），以放大“每帧多次推送常量”的成本。发送的常量包括：每网格模型矩阵、相机 VP 矩阵、缩放矩阵与填充；若设备 `maxPushConstantsSize` < 256B，则改为 128B（不含缩放与填充）。顶部图表显示帧时与 Load/Store cycles，便于观察 CPU/GPU 成本。
+
+== Push Constants
+
+简单易用，便于集成。规范保证至少 128B，很多实现支持 256B 或更高。着色器侧用 `layout(push_constant)` 声明，应用侧用 `vkCmdPushConstants` 发送。
+
+性能上，在早期 Mali 实现上较快；近年在 Mali 上“总体”可能更慢，静态描述符集更佳；但其他设备未必。对少量数据与便捷性仍然值得考虑。
+
+== Descriptor Sets（静态）
+
+资源通过“描述符”提供给着色器；描述符集通过布局与池分配，更新时用 `VkWriteDescriptorSet` 列表，绑定后 `vkCmdDraw*` 即可访问。
+
+性能示例：在某 Mali 设备上，静态描述符集下帧时与 Push Constants 相同（16.7ms），但 Load/Store cycles 从 266k/s 降至 123k/s，表明 Push Constants 为相同效果做了更多工作。
+
+== Dynamic Descriptor Sets
+
+在绑定时（`vkCmdBindDescriptorSets`）附加一个“动态偏移”，在单个大 UBO 中为每网格偏移到对应数据。性能上，Load/Store 与静态 UBO 类似，但帧时升高（16.7ms → 20.9ms），源于每帧计算/传递动态偏移的开销。
+
+== Update-after-bind Descriptor Sets
+
+为布局增加“update-after-bind”绑定位，可在“提交到队列之前”更新描述符集内容（而非“绑定到命令缓冲之后即锁定”）。与动态描述符集不兼容。此特性旨在提供灵活性，原则上无性能代价。
+
+== Buffer Object Arrays（缓冲数组 + 动态索引）
+
+预先将全场景常量打包至一个大缓冲，只需绑定一次描述符集；着色器用 `gl_InstanceIndex` 选择对应数据，或通过 Push Constants 传入索引。
+
+该方式在部分设备上可能快速，但在 Mali 上不推荐，可能禁用编译器“pilot shaders”优化，导致更多内存读周期（可在 Streamline 观测）。
+
+== 进一步阅读
+
+- Vulkan 1.2 规范
+- Writing an efficient Vulkan renderer（Zeux）
+- Vulkan Tutorial：Descriptors
+- Vulkan Fast Paths（AMD）
+
+== 最佳实践
+
+- 建议：
+  - 保持常量数据小型化（128B 是良好经验值）；
+  - 不想搭建 UBO/描述符系统时，优先考虑 Push Constants；
+  - 对可预定值直接在着色器侧提供（如 specialization constants）；
+- 避免：
+  - 在着色器中做动态索引（`buffer/uniform` 数组）以免禁用优化；
+- 影响：
+  - 方法不当会降低性能、增加带宽与 Load/Store；在 Mali 上，寄存器映射 uniforms 几乎“免费”，溢出到内存将增加读取；

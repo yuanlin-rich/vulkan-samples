@@ -1,0 +1,122 @@
+////
+- Copyright (c) 2021-2023, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 使用异步计算填满 GPU（Using async compute to saturate GPU）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/async_compute[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+多数 Vulkan 实现会暴露多个可同时使用的队列。硬件暴露多队列的主要动机是让应用在“线程之上”的层面表达并行性。
+
+== “全部用计算”——后处理个案
+
+现代引擎中，除主渲染通道（图元光栅化）外，越来越多工作转向计算着色器。本示例展示在“平铺架构（TBDR）”上获取最优行为的技巧；“立即模式渲染器（IMR，桌面）”与其策略不同（见后述）。
+
+== TBDR 上计算后处理的挑战
+
+TBDR 将顶点与片段阶段分离：先完成顶点着色与分桶，之后进行片段着色。一个关键收益是：渲染通道 N+{1,2,...} 的顶点阶段可与渲染通道 N 的片段阶段重叠。针对这类 GPU 的最佳实践是避免让片段阶段停顿。
+
+在这类体系上通常至少有两个硬件队列。以 Arm Mali 为例，计算负载与“顶点+分桶”位于同一队列，这也符合“顶点≈计算+固定功能”的直觉。
+
+当帧内存在如下序列时，计算后处理会带来问题：
+- Rasterize pass
+- FRAGMENT → COMPUTE 信号量
+- Compute pass
+- COMPUTE → FRAGMENT 信号量（性能悬崖）
+- 渲染 UI + 合成输出
+- 图形队列 Present
+
+通常在图形队列结束帧：
+- UI 与交换链渲染通道并置，避免原生分辨率 UI 图像的写回/读回；
+- 亦可在计算中绘制 UI（如借助 VK_EXT_descriptor_indexing），但实现复杂。
+
+真正问题在 COMPUTE → FRAGMENT：配合前后的 FRAGMENT ↔ COMPUTE 屏障，片段阶段在计算运行时被阻塞，这是 TBDR 性能杀手。
+
+=== 关于 TBDR 与 IMR（桌面）的差异
+
+桌面式做法之一是“从异步计算直接呈现”：
+- Rasterize pass
+- FRAGMENT → COMPUTE
+- Compute 后处理
+- 图形队列渲染 UI（带宽命中但可接受）
+- FRAGMENT → COMPUTE
+- 计算着色器合成最终结果
+- 在计算队列 Present
+
+本示例不覆盖“计算队列呈现”，但可作为思路参考。
+
+=== 使用多条图形队列“打破气泡”
+
+部分 GPU 暴露多条图形队列，可用来缓解上述屏障问题。假设有 2 条 VkQueue 均支持全部功能：
+- Rasterize（队列 #1）
+- FRAGMENT（#1）→ COMPUTE（#0）
+- Compute（#0）
+- COMPUTE（#0）→ FRAGMENT（#0）（避免再次阻塞 FRAGMENT）
+- UI + 合成输出（#0）
+- 图形队列（#0）Present
+- …
+- 下一帧 Rasterize（#1）不再被 compute 阻塞，达成重叠
+
+== 队列优先级
+
+可进一步利用队列优先级（具体行为依实现而异）。我们的意图是让驱动优先处理“接近帧尾”的队列：将 #0 设为高、#1 设为低，以便 #0 能“打断” #1，降低延迟。
+
+== 手动重排提交？
+
+另一种绕开屏障的方法是延后提交 UI + present，并在 compute 阻塞前提交下一帧的图形工作。但此法存在：
+- 多帧在途的复杂度；
+- 增加输入延迟，降低交互响应。
+
+== 示例内容
+
+image::./images/image.jpg[HDR sample]
+
+示例构建了一条极简流水线：
+- 8K 定向阴影贴图
+- 4K HDR 主渲染（基础光照）
+- 在异步计算队列上进行“非常朴素”的 HDR + Bloom
+- 交换链通道中做色调映射 + UI
+
+目标是在“阴影映射（固定功能受限）”期间并行做有用的计算，从而获益。
+
+image::./images/noasync.jpg[No async queue]
+
+此时 Fragment 周期明显低于 GPU 周期，说明片段阶段“饥饿”；这是前述屏障导致。虽有顶点与片段的部分重叠，但 compute 后处理仍在“饿死” GPU。
+
+image::./images/async.jpg[With async queue]
+
+可见性能改善（21.8ms → 22.9ms），Fragment 周期更贴近 GPU 周期，饥饿缓解。提升并非线性：顶点与片段同处一套着色核心，共享资源；但通过合理重叠，硬件队列在屏障间隙始终有事可做。
+
+=== 可选项
+- Enable async queues：使用多队列避免阻塞片段队列
+- Double buffer HDR：增加帧间重叠机会
+- Rotate shadows：关闭光照动画以降低波动，便于比较
+
+== 最佳实践（偏 TBDR）
+
+- 建议：
+  - 存在 FRAGMENT → COMPUTE 依赖时，使用多条队列；
+  - 依赖 FRAGMENT 的 COMPUTE 应在另一条队列执行，以免阻塞 FRAGMENT；
+  - 提升最终呈现所在队列的优先级；
+- 避免：
+  - 无计划地引入 FRAGMENT → COMPUTE 屏障（随后必然需要 COMPUTE → FRAGMENT）；
+- 调试：
+  - 使用 IHV 分析工具可视化不同硬件队列的饱和情况。

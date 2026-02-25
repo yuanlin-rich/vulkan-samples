@@ -1,0 +1,72 @@
+////
+- Copyright (c) 2024-2025, The Khronos Group
+- Copyright (c) 2024-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 图像压缩控制（Image Compression Control）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/image_compression_control[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+本示例展示 Vulkan 应用如何控制 `VkImage` 的压缩，尤其是帧缓冲附件与交换链图像。分别需要启用并使用扩展 `VK_EXT_image_compression_control` 与 `VK_EXT_image_compression_control_swapchain`。启用压缩通常能降低内存占用与带宽、进而提升性能。
+
+示例场景是对前向渲染通道的颜色输出应用简单后处理（色差）。因颜色输出需写入主存并在后处理中读取，属于利用图像压缩优化性能的良好时机。示例提供以下切换：
+- Default：无损压缩（如 AFBC）；
+- Fixed-rate：视觉无损压缩（如 AFRC），可设低/高压缩率；
+- None：禁用压缩（除调试外通常不建议）。
+
+压缩设置同时作用于颜色附件与交换链（若扩展可用）。屏显硬件计数帮助观察带宽与内存占用的影响。
+
+== Default 压缩
+
+无损压缩由设备透明启用，应用无需显式选择。Arm GPU 的 AFBC 使用可变码率，按块（如 4×4 像素）压缩，码率随内容而变，平均压缩比常较高（见 AFBC 示例）。
+
+== Fixed-rate 压缩
+
+固定码率对所有块使用恒定比特率，属于“有损”；因此设备不会自动启用，需开发者通过扩展显式选择。Arm GPU 上的 AFRC 在高压缩比下仍能保持视觉无损（如 Pixel 8 上 2BPC 与 Default 对比的 PSNR ~49.8dB）。
+
+固定码率具备：
+- 内存占用节省：2BPC 相比未压缩约减 65%；AFBC 因为需要最坏情况与元数据空间，尺寸略大属预期；
+- 带宽节省：示例观测未压缩 vs 2BPC 固定码率写带宽约降 38%（具体取决于帧像素分布，需按应用实测；高比例纯色的图像在可变码率下可能更优）。
+
+== 使用 VK_EXT_image_compression_control
+
+启用扩展与 `imageCompressionControl` 特性后：
+- 查询支持：在 `VkImageFormatProperties2` 的 `pNext` 链接入 `VkImageCompressionPropertiesEXT`，配合 `VkImageCompressionControlEXT` 调用 `vkGetPhysicalDeviceImageFormatProperties2KHR`，检查 `imageCompressionFixedRateFlags`（如 2BPC/5BPC）。示例在高压缩时取最低 BPC，低压缩时取最高 BPC。
+- 请求压缩：在 `VkImageCreateInfo` 的 `pNext` 链接入 `VkImageCompressionControlEXT`，指定 `VK_IMAGE_COMPRESSION_FIXED_RATE_EXPLICIT_EXT` 与 `pFixedRateFlags`；也可用 `FIXED_RATE_DEFAULT_EXT` 让实现选择固定码率层级。
+- 验证压缩：创建后通过 `vkGetImageSubresourceLayout2EXT` 获取 `VkImageCompressionPropertiesEXT` 的 `imageCompressionFlags/fixedRateFlags`。
+
+== 使用 VK_EXT_image_compression_control_swapchain
+
+交换链图像压缩控制与普通图像类似，但需启用 `imageCompressionControlSwapchain` 特性与对应扩展，且依赖基础的 `VK_EXT_image_compression_control`。流程：
+- 查询表面支持：通过 `vkGetPhysicalDeviceSurfaceFormats2KHR` 获取格式列表，并在每项的 `pNext` 链接入 `VkImageCompressionPropertiesEXT` 检查 `imageCompressionFixedRateFlags`；
+- 请求压缩：在 `VkSwapchainCreateInfoKHR` 的 `pNext` 链接入 `VkImageCompressionControlEXT`（显式或默认固定码率）；
+- 验证压缩：与普通图像相同的方法即可，无需专门启用 swapchain 扩展进行验证。
+
+注意：即使 GPU 支持且启用扩展，交换链仍可能未压缩，常见原因是系统其他 IP（如显示控制器）不支持。
+
+== 禁用固定码率压缩
+
+关闭 Fixed-rate 时需确保默认压缩仍启用：`flags` 应为 `VK_IMAGE_COMPRESSION_DEFAULT_EXT` 而非 `VK_IMAGE_COMPRESSION_DISABLED_EXT`（后者禁用所有压缩，会显著影响性能）。
+
+== 小结
+
+`VK_EXT_image_compression_control` 可用于检查默认压缩是否启用，并在合适场景请求固定码率（交换链需配合 `VK_EXT_image_compression_control_swapchain`）。固定码率可显著降低内存占用与带宽而不牺牲图像质量，从而提升性能与节能。

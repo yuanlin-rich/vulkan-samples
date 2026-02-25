@@ -1,0 +1,56 @@
+////
+- Copyright (c) 2023-2025, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 颜色写入启用（Color write enable）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/color_write_enable[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+本示例演示如何使用 `VK_EXT_color_write_enable` 扩展。该扩展允许通过管线动态状态切换输出颜色附件（color attachments）的写入，使程序可以准备一个由特定颜色混合附件填充的额外帧缓冲（framebuffer），并动态地与最终场景进行混合。
+
+其最终效果可与 `vkCmdSetColorWriteMaskEXT` 相比，但不要求驱动支持 `VK_EXT_extended_dynamic_state3`。
+
+== Vulkan 中的使用方法
+
+- 需启用设备扩展 `VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME`；
+- 通过在 `vkGetPhysicalDeviceFeatures2` 的 `VkPhysicalDeviceFeatures2` pNext 链上添加 `VkPhysicalDeviceColorWriteEnableFeaturesEXT` 查询支持；
+- `VkPipelineColorWriteCreateInfoEXT` 包含一组布尔值，用于切换对应的 `VkPipelineColorBlendAttachmentState`；该数组可使用 `vkCmdSetColorWriteEnableEXT` 在运行时动态覆盖。
+
+示例中使用两个子通道（subpass）：
+- 第一个子通道使用三个附件，每个附件仅启用一个颜色通道位（R、G、B），分别绘制三角形；
+- 第二个子通道组合前一通道的三张图像；通过复选框调用 `vkCmdSetColorWriteEnableEXT` 切换关闭各附件；被关闭的通道值将取自背景色的同通道；背景色可通过滑块设置。
+
+== 示例展示的要点
+
+- 如何启用扩展；
+- 如何在颜色混合状态中设置多个颜色附件；
+- 如何为多颜色附件配置渲染子通道与帧缓冲；
+- 如何编写具有多个输出的片段着色器。
+
+== 文档链接
+
+- https://registry.khronos.org/vulkan/specs/latest/man/html/VK_EXT_color_write_enable.html
+- https://registry.khronos.org/vulkan/specs/latest/man/html/VkSubpassDescription.html
+- https://registry.khronos.org/vulkan/specs/latest/man/html/VkFramebufferCreateInfo.html
+
+== 另见
+
+- https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetColorWriteMaskEXT.html

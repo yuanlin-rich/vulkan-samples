@@ -1,0 +1,58 @@
+////
+- Copyright (c) 2021-2025, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 在 Vulkan 中使用 Basis Universal 超压缩 GPU 纹理（Using Basis Universal supercompressed GPU texture codec with Vulkan）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/texture_compression_basisu[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+本教程与示例代码演示如何在 Vulkan 应用中使用 Basis Universal 超压缩 GPU 纹理。
+
+== KTX2 格式
+
+KTX 是用于存储多种纹理类型（2D、立方体等）与格式（未压缩/压缩）的“GPU 纹理容器”。2.0 版本增加了 Basis Universal 超压缩纹理支持。
+
+== Basis Universal
+
+Basis Universal 是超压缩 GPU 纹理数据交换系统，实现了 UASTC 与 ETC1S 两种“传输格式”。两者可快速转码为多种 GPU 原生压缩/未压缩格式（RGB/RGBA、BCn、ETC1、ETC2 等）。因此，与直接存储 BC3 的 KTX2 文件不同，BasisU 的数据需在运行时转码。
+
+== 载入 KTX2 的库
+
+本仓库与示例使用官方 Khronos KTX Software 的 libktx 来加载并转码 BasisU 压缩的 KTX2 纹理（见 third_party/CMakeLists.txt，同时包含 BasisU 转码器）。也可使用 KTX-Software 发布页提供的预编译二进制。若仅需 KTX2+BasisU，轻量替代为 basisu 的 `basist::ktx2_transcoder`（参见 Binomial 文档）。
+
+== 选择 GPU 原生目标格式
+
+KTX2 文件以 ETC1S/UASTC 存储，GPU 不可直接使用。需选择有效的原生目标格式并转码。本示例根据设备 Vulkan 格式支持构建目标格式列表（KTX_ 前缀，示例优先 BC7，若支持再加入 ASTC/ETC2 等，最后总是包含未压缩 RGBA）。实际应用的选择会更复杂，可参考 KTX/BasisU 开发者指南。
+
+== 加载 KTX2
+
+在 `transcode_texture` 中加载与转码：
+- 从磁盘加载：使用 `ktxTexture2` 类加载文件（部分 API 需向下转换为 `ktxTexture`）；
+- 判断是否需转码：`ktxTexture2_NeedsTranscoding`；若文件已是原生（如 BCn）则无需转码；
+- 执行转码：`ktxTexture2_TranscodeBasis(ktx_texture, target_format, 0)`；例如将 UASTC 转为 BC7；
+
+== 上传纹理数据
+
+转码后，`ktxTexture` 中已是原生格式数据（如 BC7），可直接上传到支持该压缩的 GPU。取其 `vkFormat` 创建 Vulkan 图像，分配 staging 缓冲，将 KTX 图像数据写入，为各 mip 构建 `VkBufferImageCopy` 并 `vkCmdCopyBufferToImage` 上传，最后创建采样器/视图照常使用。
+
+== 示例
+
+示例运行时可将固定的 ETC1S/UASTC 集转码为设备支持的原生目标格式，并可缩放/旋转图像观察不同输入/目标组合的效果。注意：Debug 构建下转码速度较慢，建议使用 Release 构建以获得最佳性能。

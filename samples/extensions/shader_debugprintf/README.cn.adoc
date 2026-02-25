@@ -1,0 +1,237 @@
+////
+- Copyright (c) 2024-2025, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 着色器调试 Printf（Shader debug Printf）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/shader_debugprintf[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+:pp: {plus}{plus}
+
+image::./images/sample.png[Sample]
+
+== 概览
+
+本示例演示如何使用 https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_shader_non_semantic_info.html[VK_KHR_shader_non_semantic_info]，在运行时通过“打印函数”为 SPIR-V 着色器添加输出调试消息的能力。
+
+它允许你从特定着色器阶段输出与调用（invocation）相关的调试信息，并可配合 https://www.renderdoc.org[RenderDoc] 等图形调试器定位问题与缺陷。也可以在应用内部显示这些数据（如调试窗口或命令行），但这种方式存在固定缓冲区大小等限制，所有消息需要放入其中。
+
+== （调试）Printf 在着色器中的用法
+
+正确设置该扩展后，你可以在着色器中使用与 https://en.wikipedia.org/wiki/Printf[Printf] 类似的语句（大多数 CPU 侧语言都提供某种形式），从当前着色器调用输出消息（例如 VS 中当前处理的顶点、FS 中当前产生的片元）。这使你能输出仅属于单次调用的特定值，便于定位仅在某些调用路径上出现的错误或问题。
+
+例如在顶点着色器中输出变换后的位置，GLSL 可写为：
+
+[,glsl]
+----
+void main()  {
+	vec4 outPosition = ubo.view * ubo.model * inPosition;
+	debugPrintfEXT("Transformed position = %v4f", outPosition);
+}
+----
+
+HLSL 版本：
+[,hlsl]
+----
+VSOutput main(VSInput input) {
+	float4 output.Position = mul(ubo.view, mul(ubo.model, input.Position));
+	printf("Transformed position = %v4f", output.Position);
+}
+----
+
+== 环境配置
+
+着色器 printf 由验证层提供。因此首先需要在实例创建时启用 `VK_LAYER_KHRONOS_validation`，并通过 `VkValidationFeaturesEXT` 启用 `VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT`：
+
+[,cpp]
+----
+void ShaderDebugPrintf::create_instance()
+{
+    ...
+
+    // Shader printf 属于验证层的特性，需要启用
+    std::vector<VkValidationFeatureEnableEXT>  validation_feature_enables = {VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT};
+
+    VkValidationFeaturesEXT validation_features{VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+    validation_features.enabledValidationFeatureCount = 1;
+    validation_features.pEnabledValidationFeatures    = validation_feature_enables.data();
+----
+
+将其链入实例创建：
+
+[,cpp]
+----
+    std::vector<const char *> validation_layers = {"VK_LAYER_KHRONOS_validation"};
+
+    VkInstanceCreateInfo instance_create_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    ...
+    instance_create_info.pNext = &validation_features;
+----
+
+*更新：* 本示例现已利用 Vulkan Samples 框架提供的替代机制，简化 `VK_LAYER_KHRONOS_validation` 与 `VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT` 的启用：
+
+[,cpp]
+----
+const std::vector<const char *> ShaderDebugPrintf::get_validation_layers()
+{
+	// 初始化验证层覆盖列表为默认（空）
+	std::vector<const char *> validation_layers = ApiVulkanSample::get_validation_layers();
+
+	// 强制启用验证层以使用 debugPrintfEXT 特性
+	validation_layers.push_back("VK_LAYER_KHRONOS_validation");
+
+	return validation_layers;
+}
+----
+
+新的 `VK_EXT_layer_settings` 扩展用于启用 `VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT`，Vulkan Samples 框架在实例创建时使用它。如果运行时可用，框架将通过如下 `VkLayerSettingEXT` 启用所需特性；若不可用，则回退到上面的自定义 `create_instance()` 逻辑：
+
+[,cpp]
+----
+ShaderDebugPrintf::ShaderDebugPrintf()
+{
+	...
+	// 若可用，使用层设置为验证层配置 debugPrintfEXT
+	add_instance_extension(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME, /*optional*/ true);
+
+	VkLayerSettingEXT layerSetting;
+	layerSetting.pLayerName   = "VK_LAYER_KHRONOS_validation";
+	layerSetting.pSettingName = "enables";
+	layerSetting.type         = VK_LAYER_SETTING_TYPE_STRING_EXT;
+	layerSetting.valueCount   = 1;
+
+	// 设为 static 以保证离开构造函数作用域后仍然有效
+	static const char *layerEnables = "VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT";
+	layerSetting.pValues            = &layerEnables;
+
+	add_layer_setting(layerSetting);
+}
+----
+
+== 在应用中显示调试输出
+
+若仅希望在 RenderDoc 等调试器中读取着色器 printf 消息，则无需额外工作。使用上述实例设置与着色器中的 printf 后即可读取这些消息。也可使用 LunarG SDK 的 VkConfig 将消息重定向到特定输出。
+
+若希望在应用自身中显示或处理这些消息，需要通过调试消息回调（debug messenger）进行处理，这与验证回调的设置基本一致：
+
+[,cpp]
+----
+	VkDebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+	debug_utils_messenger_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+	debug_utils_messenger_create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
+	debug_utils_messenger_create_info.pfnUserCallback = debug_utils_message_callback;
+
+	VK_CHECK(vkCreateDebugUtilsMessengerEXT(vulkan_instance, &debug_utils_messenger_create_info, nullptr, &debug_utils_messenger));
+----
+
+[NOTE]
+====
+着色器 printf 消息属于 `info` 类型，因此需要在 `messageSeverity` 中启用 `VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT` 才会进入回调。
+====
+
+启用验证层与特性并接好回调后，即可处理或输出 printf 消息。一个最基本的实现如下：
+
+[,cpp]
+----
+VKAPI_ATTR VkBool32 VKAPI_CALL ShaderDebugPrintf::debug_utils_message_callback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT             messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+    void                                       *pUserData)
+{
+    std::cout << pCallbackData->pMessage << "\n";
+	return VK_FALSE;
+}
+----
+
+如何处理这些消息取决于你的需求。在本示例中，我们将输出限制为某次绘制调用的第一次调用：
+
+[,glsl]
+----
+// 使用 debug printf 输出顶点位置
+if (gl_VertexIndex == 0) {
+    debugPrintfEXT("Position = %v4f", outPos);
+}
+----
+
+随后收集这些消息以在图形界面中显示。示例还会检查是否为 printf 消息（`pMessageIdName == WARNING-DEBUG-PRINTF`），以便与真实的验证消息区分：
+
+[,cpp]
+----
+VKAPI_ATTR VkBool32 VKAPI_CALL ShaderDebugPrintf::debug_utils_message_callback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT             messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+    void                                       *pUserData)
+{
+	if (strcmp(pCallbackData->pMessageIdName, "WARNING-DEBUG-PRINTF") == 0)
+	{
+		// 验证消息较为冗长，但我们只想要来自着色器的文本，因此截取第一处着色器输出单词之后的内容
+		// 参见 scene.vert: debugPrintfEXT("Position = %v4f", outPos);
+		std::string shader_message{pCallbackData->pMessage};
+		shader_message = shader_message.substr(shader_message.find("Position"));
+		debug_output.append(shader_message + "\n");
+	}
+	return VK_FALSE;
+}
+----
+
+== Printf 输出缓冲大小
+
+默认的调试输出缓冲大小有限。如果输出很多消息（例如每个片元都 printf），可能不足并收到关于缓冲过小的验证警告。可通过 LunarG SDK 的 VkConfig 增大该缓冲，详见白皮书：https://www.lunarg.com/wp-content/uploads/2021/08/Using-Debug-Printf-02August2021.pdf。
+
+[NOTE]
+====
+这并不适用于在图形调试器中显示消息的情况。
+====
+
+== 内存注意事项
+
+使用 debug printf 会消耗一个描述符集。如果你用尽了可用的描述符集，可能需要在描述符池分配时增加集的数量。因此示例从池中额外分配了一个集合。它还会消耗设备内存，其占用取决于消息的数量与大小。
+
+== 在图形调试器中的 Printf
+
+直接在应用中显示 printf 消息适用于调用数较少或信息频率较低的场景。更常见的用法是配合 RenderDoc 等调试器。
+
+如果我们取消“仅输出第一次调用”的限制，将 `scene.vert` 从：
+
+[,glsl]
+----
+// 使用 debug printf 输出顶点位置
+if (gl_VertexIndex == 0) {
+    debugPrintfEXT("Position = %v4f", outPos);
+}
+----
+
+改为：
+
+[,glsl]
+----
+debugPrintfEXT("Position = %v4f", outPos);
+----
+
+然后在 RenderDoc 中运行示例，即可得到所有调用的着色器 printf 消息列表：
+
+image::./images/renderdoc_shader_messages.png[RenderDoc]
+
+在事件浏览器中选择包含调试消息的绘制调用，会在该事件上显示“消息数量”标签（如 1250 msg(s)）。点击即可打开该调用的消息列表，并可进一步跳转至网格查看器（顶点着色器场景）或纹理视图（片元着色器场景）。
+
+== 结论
+
+尽管并非完整的调试方案，在着色器中使用 printf 能帮助发现一些难以定位或可视化的问题。结合 RenderDoc 这类调试器，shader printf 是调试着色器的有力工具。

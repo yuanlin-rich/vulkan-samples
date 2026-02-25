@@ -1,0 +1,112 @@
+////
+- Copyright (c) 2025-2026, Holochip Inc.
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 光线追踪的 SER（Shader Execution Reordering）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/ray_tracing_invocation_reorder[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+*扩展*：`VK_EXT_ray_tracing_invocation_reorder`
+
+*GLSL 扩展*：`GL_EXT_shader_invocation_reorder`
+
+== 概览
+
+本示例演示“着色器执行重排（SER）”，它通过在 GPU 上重组着色调用以聚合同类工作，降低分歧、提升一致性与性能。示例展示如何在命中对象（Hit Object）配合 `reorderThreadEXT()`/`ReorderThread()` 下获得 20–50% 的性能提升。
+
+注意：当前 SDK 的 glslc 可能尚不支持 `GL_EXT_shader_invocation_reorder`，本示例默认使用 Slang 构建并生成 SPIR-V；GLSL 源仅供参考。
+
+== 分歧问题
+
+光线追踪常见两类分歧：
+- 控制流分歧：同一子组线程走不同分支/调用不同 CH/Miss 着色器；
+- 数据分歧：射线不一致导致对几何/纹理/AS 的访问分散，缓存利用率差、带宽压力大；
+
+== SER 如何帮助
+
+SER 通过“命中对象（hit object）”将遍历与着色调用解耦，允许在执行前进行重排：
+
+[,glsl]
+----
+hitObjectEXT hitObj; hitObjectRecordEmptyEXT(hitObj);
+hitObjectTraceRayEXT(hitObj, ...);
+reorderThreadEXT(hitObj);
+hitObjectExecuteShaderEXT(hitObj, payloadIndex);
+----
+
+Slang 等效：
+
+[,slang]
+----
+HitObject hitObj = HitObject::TraceRay(...);
+ReorderThread(hitObj);
+HitObject::Invoke(topLevelAS, hitObj, payload);
+----
+
+重排可实现：
+- 将将执行同一着色器的调用分组；
+- 聚合访问相似数据的调用；
+- 降低分歧、提升缓存效率；
+
+== 一致性提示（Coherence Hints）
+
+可提供提示以指导重排，例如按实例 ID 分组：
+
+[,glsl]
+----
+uint hint = hitObjectIsHitEXT(hitObj) ? hitObjectGetInstanceIdEXT(hitObj) : 0;
+reorderThreadEXT(hitObj, hint, 8);
+----
+
+优先级：着色器 ID > 提示值 > 实现自定义。适合的提示包括材质 ID、纹理绑定索引、路径长度/早退标志等。
+
+== 不重排时的命中对象用途
+
+即便不重排，命中对象仍有价值：
+- 阴影/AO 射线：仅用 `hitObjectIsHitEXT()`/`hitObjectIsMissEXT()` 判定，无需调用 CH；
+- 更灵活的载荷：遍历与着色调用使用不同 payload；
+- 直接在射线生成阶段查询命中信息；
+
+== 最佳实践
+
+- 适用场景：多次弹射的路径追踪、多种材质/CH、粗糙反射等；
+- 收益较小：高度一致的一次射线、简单着色器、单一“超级着色器”场景；
+- 最小化“跨重排的活跃状态”：避免在 `reorderThreadEXT()` 前后保持大量局部变量/大 payload；
+- 设备支持：通过 `VkPhysicalDeviceRayTracingInvocationReorderPropertiesEXT` 查询是否支持重排；
+
+== 本示例
+
+- 三种材质（漫反射、折射、发光粒子）制造分歧；
+- UI 开关 SER 与一致性提示；
+- 对比传统 `traceRayEXT()` 与“HitObject + ReorderThread”；
+- 实时显示设备是否支持重排；
+
+== 启用扩展
+
+[,cpp]
+----
+add_device_extension(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+REQUEST_REQUIRED_FEATURE(gpu, VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT, rayTracingInvocationReorder);
+----
+
+Slang 着色器：使用 `HitObject` 与 `ReorderThread()`；GLSL 着色器需 `#extension GL_EXT_shader_invocation_reorder : enable`（可能尚未被 glslc 支持）。
+
+== 预期收益
+
+真实应用：11–24%；高分歧合成基准：40–50%；与其他优化（如 OMM）结合：30–40%。收益取决于场景复杂度、分歧程度、提示质量与活跃状态大小。

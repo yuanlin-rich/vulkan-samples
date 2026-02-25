@@ -1,0 +1,43 @@
+////
+- Copyright (c) 2023, Holochip Corporation
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 全屏独占（Full Screen Exclusive）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/full_screen_exclusive[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+本示例演示如何在应用中集成 `VK_EXT_full_screen_exclusive` 扩展。该扩展为 Windows 11 之前版本上的“全屏独占”问题提供解决方案：在旧版 Windows 上无法正确获得独占全屏窗口，因此该扩展仅适用于 Windows 11 之前的平台。
+
+== 介绍
+
+示例提供在 Windows 应用中激活全屏独占模式的完整流程。用户可通过键盘在 1）窗口模式、2）无边框全屏、3）独占全屏 三种显示模式之间切换。
+
+== 提醒
+
+在 swapchain 创建信息中启用 full screen exclusive 扩展并不会自动将应用窗口切换到全屏模式。正确的步骤如下：
+
+1）使用 full screen exclusive 重新创建 swapchain；
+2）用新 swapchain 重新创建帧缓冲；
+3）将应用窗口配置为全屏模式；
+4）调用 acquire full screen exclusive EXT；
+
+更多信息参考：
+- https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-monitorfromwindow[MonitorFromWindow 函数（winuser.h）]

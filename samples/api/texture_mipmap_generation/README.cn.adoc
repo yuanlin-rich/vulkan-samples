@@ -1,0 +1,138 @@
+////
+- Copyright (c) 2019-2023, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 运行时 mip-map 生成（Run-time mip-map generation）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/texture_mipmap_generation[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+在运行时，通过图像 blit 与合适的图像内存屏障，从基础图像生成完整的纹理 mip 链，而非从文件加载离线生成的 mip-map。
+
+尽管磁盘纹理通常预先离线生成并存储 mip，但该技术常用于动态纹理（例如用于反射的立方体贴图或其他渲染到纹理的效果）。为运行时生成的纹理提供 mip-map 可在图像稳定性与性能方面带来优势：未使用 mip 映射时图像（尤其高频纹理和如镜面等分量）易发噪点；启用 mip 映射通常可通过缓存带来更高性能。
+
+本示例仅在开始时为一个纹理生成一条 mip 链，但该技术也可在常规帧渲染期间为动态纹理生成。部分 GPU 还提供“异步传输队列”，可后台执行此类操作；可通过仅设置 `VK_QUEUE_TRANSFER_BIT` 的队列族进行检测。
+
+== 对比
+
+- 关闭 mip 映射：
+
+image::./images/mip_mapping_off.jpg[Off,512px]
+
+- 使用双线性过滤的 mip 映射：
+
+image:./images/mip_mapping_bilinear.jpg[Bilinear,512px]
+
+- 使用各向异性过滤的 mip 映射：
+
+image:./images/mip_mapping_anisotropic.jpg[Anisotropic,512px]
+
+== 要求
+
+使用 https://www.khronos.org/registry/vulkan/specs/1.0/man/html/vkCmdBlitImage.html[`vkCmdBlitImage`] 进行从上一 mip 级别到下一 mip 级别的下采样，要求格式支持 `BLIT_SRC_BIT` 与 `BLIT_DST_BIT`。若不支持，则需更换格式或以自定义着色器生成 mip 级别。示例使用 `VK_FORMAT_R8G8B8A8_SRGB`，多数实现通常支持上述标志。可先用 https://www.khronos.org/registry/vulkan/specs/1.0/man/html/vkGetPhysicalDeviceFormatProperties.html[`vkGetPhysicalDeviceFormatProperties`] 检查支持情况。
+
+== 关注点
+
+=== 图像设置
+
+尽管最初只上传第 0 个 mip 级别，图像创建时应指定所需 mip 级别总数；数量依据最大尺寸计算：
+
+[,cpp]
+----
+texture.mip_levels = static_cast<uint32_t>(floor(log2(std::max(texture.width, texture.height))) + 1);
+----
+
+随后传入创建信息：
+
+[,cpp]
+----
+VkImageCreateInfo image_create_info = vkb::initializers::image_create_info();
+image_create_info.imageType         = VK_IMAGE_TYPE_2D;
+image_create_info.format            = format;
+image_create_info.mipLevels         = texture.mip_levels;
+----
+
+指定 mip 级别数量是为了为图像分配正确数量的内存（`vkAllocateMemory`）。
+
+=== 上传基础 mip 级别
+
+将磁盘中的图像数据复制到新图像，作为 mip 链的基础：
+
+[,cpp]
+----
+VkBufferImageCopy buffer_copy_region               = {};
+buffer_copy_region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+buffer_copy_region.imageSubresource.mipLevel       = 0;
+buffer_copy_region.imageSubresource.baseArrayLayer = 0;
+buffer_copy_region.imageSubresource.layerCount     = 1;
+buffer_copy_region.imageExtent.width               = texture.width;
+buffer_copy_region.imageExtent.height              = texture.height;
+buffer_copy_region.imageExtent.depth               = 1;
+vkCmdCopyBufferToImage(copy_command, staging_buffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &buffer_copy_region);
+----
+
+=== 准备基础 mip 级别
+
+若打算从基础 mip 级别进行 blit，需要插入图像内存屏障，将其布局转为 `TRANSFER_SRC`：
+
+[,cpp]
+----
+vkb::insert_image_memory_barrier(
+    copy_command,
+    texture.image,
+    VK_ACCESS_TRANSFER_WRITE_BIT,
+    VK_ACCESS_TRANSFER_READ_BIT,
+    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    VK_PIPELINE_STAGE_TRANSFER_BIT,
+    VK_PIPELINE_STAGE_TRANSFER_BIT,
+    {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1});
+----
+
+=== 生成 mip 链
+
+两种常见方法：
+- 从 n-1 级 blit 到 n 级（本示例采用）；
+- 始终从基础图像 blit 到所有级别。
+
+图像 blit/复制在命令缓冲中进行，需提交并同步（如使用 `vkFence`）。循环处理各级：为每次从 i-1 到 i 的 blit 准备 `VkImageBlit`；在写入前将目标 mip 布局设为 `TRANSFER_DST_OPTIMAL`；完成 blit 后把其设为 `TRANSFER_SRC_OPTIMAL`，作为下一次的源。
+
+=== 最终图像布局转换
+
+循环结束后，将所有级别转为实际使用布局（本示例为 `SHADER_READ`）。由于各级都处于 `TRANSFER_SRC`，可用单个屏障一次性完成：
+
+[,cpp]
+----
+vkb::insert_image_memory_barrier(
+    blit_command,
+    texture.image,
+    VK_ACCESS_TRANSFER_READ_BIT,
+    VK_ACCESS_SHADER_READ_BIT,
+    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    VK_PIPELINE_STAGE_TRANSFER_BIT,
+    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+    {VK_IMAGE_ASPECT_COLOR_BIT, 0, texture.mip_levels, 0, 1});
+----
+
+=== 图像视图创建
+
+图像视图也需指定使用的 mip 级别数量（`VkImageViewCreateInfo.subresourceRange.levelCount`）。

@@ -1,0 +1,33 @@
+////
+- Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 移动端 NeRF（Mobile NeRF）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/general/mobile_nerf[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+本示例基于 Google 的 https://mobile-nerf.github.io/[Mobile NeRF]，源自其 https://github.com/google-research/jax3d/tree/main/jax3d/projects/mobilenerf[原始代码]，并针对 Vulkan 做了优化。
+
+不同于传统的 NeRF 渲染（通常需要对每条射线进行多次 MLP 查询，常用射线步进实现，极易导致多数 GPU 上帧率不够交互），Mobile NeRF 利用光栅化管线生成最终图像：通过三角网格与一张“特征纹理”，对每个可见像素在片段着色器中运行一个小型 MLP，将特征与视角方向映射为输出像素颜色。该方法在移动端 GPU 上也能获得交互式帧率。
+
+== 论文摘要： https://mobile-nerf.github.io/[Mobile NeRF]
+神经辐射场（NeRF）可从多视角照片合成新视角图像，但其基于射线步进的体渲染算法与通用图形硬件并不匹配。Mobile NeRF 提出一种基于“带纹理多边形”的表示：以多边形及其“二值不透明度与特征向量纹理”表示 NeRF，使用 Z-buffer 光栅化得到每像素的特征，再由片段着色器中的小型、视角相关 MLP 生成像素颜色。该方案可充分利用传统多边形光栅管线的像素级并行性，在包括手机在内的多种平台上实现交互帧率。
+
+== 说明
+原始源码同样为 Apache-2.0 许可。示例中使用的着色器文件在适用处标注了改动说明。

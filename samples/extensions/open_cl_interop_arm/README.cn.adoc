@@ -1,0 +1,82 @@
+////
+- Copyright (c) 2021-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= OpenCL 互操作（Android 硬件缓冲）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/open_cl_interop_arm[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+在某些场景下，OpenCL 用于计算、另一套 API 用于图形，此时互操作很重要。例如 AR 应用中，图形渲染常与机器学习工作负载结合，后者可用 OpenCL 执行；为获得最佳性能，需要零拷贝数据共享与高效同步。
+
+目前没有“专用”的 Vulkan-OpenCL 互操作扩展，但两套 API 均提供通用共享机制。该示例演示通过 Android Hardware Buffers 及其在 Vulkan 与 OpenCL 的扩展，实现零拷贝共享。
+
+== 数据共享
+
+零拷贝意味着两套 API 使用同一内存区域（图像或缓冲）。Vulkan 与 OpenCL 可通过下列方式共享：
+- Android 硬件缓冲（AHB）
+- dma_buf
+- 主机内存
+
+本示例覆盖更贴近移动开发的 AHB 方案。
+
+== Android 硬件缓冲（AHB）
+
+AHB 是可绑定到 Vulkan、OpenGL ES 或 OpenCL 的原生内存区域，可在两套 API 间复用：
+
+image::./images/shared_hardware_buffer.png[Sample]
+
+=== Vulkan 支持
+
+使用 `VK_ANDROID_external_memory_android_hardware_buffer` 扩展导入/导出。将 `VkExternalMemoryImageCreateInfo` 链到 `VkImageCreateInfo::pNext` 指定 handle 类型为 `ANDROID_HARDWARE_BUFFER`；为该图像（或缓冲）分配内存时，在 `VkMemoryDedicatedAllocateInfo` 的 `image` 字段指定共享对象，并在 `VkExportMemoryAllocateInfo` 的 `handleTypes` 指定 AHB 句柄类型；内存分配与绑定后通过 `vkGetMemoryAndroidHardwareBufferANDROID` 导出 `AHardwareBuffer`。
+
+导入流程则反向：先创建 AHB，再在 `VkImportAndroidHardwareBufferInfoANDROID` 中提供该缓冲并链入 `VkMemoryAllocateInfo`（`allocationSize/memoryTypeIndex` 基于 `vkGetAndroidHardwareBufferPropertiesANDROID`）。完成分配与绑定后即可使用。
+
+=== OpenCL 支持
+
+在 Arm 设备上，使用 `cl_arm_import_memory` 导入 AHB（以及 dma_buf/主机内存）。示例通过：
+
+[,c]
+----
+const cl_import_properties_arm import_properties[] = {
+    CL_IMPORT_TYPE_ARM, CL_IMPORT_TYPE_ANDROID_HARDWARE_BUFFER_ARM,
+    0};
+cl_mem shared_cl_mem = clImportMemoryARM(context, CL_MEM_READ_WRITE,
+                                         import_properties,
+                                         hardware_buffer,
+                                         CL_IMPORT_MEMORY_WHOLE_ALLOCATION_ARM,
+                                         &result);
+----
+
+== 示例流程
+
+每帧开始执行 OpenCL 内核，填充由 AHB 支撑的 `cl_mem`（模式随时间变化）；该 AHB 从绑定到 Vulkan 纹理的 `VkDeviceMemory` 导出；随后显示该纹理（复用“Texture Loading”示例的四边形与着色器）。
+
+示例中仅用一个共享纹理，实际应用建议按帧缓冲数量准备共享纹理，实现类似双缓冲：当前帧执行 OpenCL，上一帧渲染与显示。
+
+API 间同步由主机侧完成：渲染前冲刷 OpenCL 队列，使用 `VkFence` 确保渲染完成。
+
+image::./images/sample.png[Sample]
+
+== 结论
+
+通过两套 API 的扩展导入/导出句柄，可在共享内存区域实现零拷贝数据共享。该示例展示的句柄类型为 Android 硬件缓冲，涉及的扩展为：
+- Vulkan：`VK_ANDROID_external_memory_android_hardware_buffer`
+- OpenCL：`cl_arm_import_memory`

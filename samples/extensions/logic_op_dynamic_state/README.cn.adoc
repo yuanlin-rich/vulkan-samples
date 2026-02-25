@@ -1,0 +1,111 @@
+////
+- Copyright (c) 2023-2025, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 逻辑运算动态状态（Logic operations dynamic state）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/logic_op_dynamic_state[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/logic_op_dynamic_state_screenshot.png[Sample]
+
+== 概览
+
+`VK_EXT_extended_dynamic_state2` 扩展允许使用更多动态状态（例如 `VK_DYNAMIC_STATE_LOGIC_OP_EXT`），可在无需重建管线的情况下动态改变逻辑运算，从而影响混合行为。示例展示了该扩展在动态切换逻辑运算并应用于混合时的用法。
+
+== 表面格式设置
+
+逻辑运算仅适用于“有符号/无符号整数与规范化整数帧缓冲”。示例通过覆盖 `create_render_context`（派生自 `ApiVulkanSample`）将表面格式设置为 `VK_FORMAT_B8G8R8A8_UNORM`：
+
+[,C++]
+----
+auto surface_priority_list = std::vector<VkSurfaceFormatKHR>{
+    {VK_FORMAT_B8G8R8A8_UNORM, VK_COLORSPACE_SRGB_NONLINEAR_KHR},
+};
+render_context = platform.create_render_context(*device.get(), surface, surface_priority_list);
+----
+
+== 在管线创建时启用逻辑运算
+
+示例创建两条管线：背景与基线（用于展示混合效果）。在基线管线中将 `VkPipelineColorBlendStateCreateInfo::logicOpEnable` 设为 `VK_TRUE`，并将 `VK_DYNAMIC_STATE_LOGIC_OP_EXT` 加入 `VkPipelineDynamicStateCreateInfo`：
+
+[,C++]
+----
+VkPipelineColorBlendStateCreateInfo color_blend_state = vkb::initializers::pipeline_color_blend_state_create_info(1, &blend_attachment_state);
+color_blend_state.logicOpEnable = VK_TRUE; // 启用逻辑运算
+
+std::vector<VkDynamicState> dynamic_state_enables = {
+    VK_DYNAMIC_STATE_VIEWPORT,
+    VK_DYNAMIC_STATE_SCISSOR,
+    VK_DYNAMIC_STATE_LOGIC_OP_EXT,
+};
+VkPipelineDynamicStateCreateInfo dynamic_state = vkb::initializers::pipeline_dynamic_state_create_info(dynamic_state_enables.data(), dynamic_state_enables.size(), 0);
+...
+VkGraphicsPipelineCreateInfo graphics_create{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+graphics_create.pColorBlendState = &color_blend_state;
+graphics_create.pDynamicState    = &dynamic_state;
+VK_CHECK(vkCreateGraphicsPipelines(get_device().get_handle(), pipeline_cache, 1, &graphics_create, VK_NULL_HANDLE, &pipeline.baseline));
+----
+
+背景管线中不启用逻辑运算：
+
+[,C++]
+----
+std::vector<VkDynamicState> dynamic_state_enables_background = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+color_blend_state.logicOpEnable = VK_FALSE; // 关闭逻辑运算
+----
+
+== 在命令缓冲中动态设置逻辑运算
+
+使用 `vkCmdSetLogicOpEXT` 可在命令缓冲录制时动态设置逻辑运算。示例在绘制立方体之前根据 GUI 选项调用：
+
+[,C++]
+----
+/* 绘制背景 */
+draw_model(background_model, draw_cmd_buffer);
+
+/* 设置 GUI 选择的逻辑运算 */
+vkCmdSetLogicOpEXT(draw_cmd_buffer, static_cast<VkLogicOp>(gui_settings.selected_operation));
+
+/* 绘制立方体 */
+draw_created_model(draw_cmd_buffer);
+----
+
+可用逻辑运算由 `VkLogicOp` 枚举定义（详见规范）。
+
+== 启用所需扩展
+
+该 API 需要 Vulkan 1.0 与相应头/SDK，已部分合入 Vulkan 1.3。设备扩展 `VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME` 依赖实例扩展 `VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME`：
+
+[,C++]
+----
+add_instance_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+add_device_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME);
+----
+
+启用扩展特性通过 `VkPhysicalDeviceExtendedDynamicState2FeaturesEXT` 与 `VkPhysicalDeviceExtendedDynamicStateFeaturesEXT` 完成（示例在 `request_gpu_features` 中设置）：
+
+[,C++]
+----
+auto &features2 = gpu.request_extension_features<VkPhysicalDeviceExtendedDynamicState2FeaturesEXT>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT);
+features2.extendedDynamicState2        = VK_TRUE;
+features2.extendedDynamicState2LogicOp = VK_TRUE;
+
+auto &features = gpu.request_extension_features<VkPhysicalDeviceExtendedDynamicStateFeaturesEXT>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT);
+features.extendedDynamicState = VK_TRUE;
+----

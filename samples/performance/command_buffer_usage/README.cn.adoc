@@ -1,0 +1,108 @@
+////
+- Copyright (c) 2019-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 命令缓冲的使用与多线程录制（Command buffer usage and multi-threaded recording）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/command_buffer_usage[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+:pp: {plus}{plus}
+
+== 概览
+
+本示例演示如何使用与管理“二级命令缓冲”，以及如何并发录制它们。多线程录制绘制调用有助于降低 CPU 帧时。
+
+在平铺架构上，最佳拆分方式是把绘制录入二级命令缓冲：这样可提交到同一渲染通道并利用“平铺本地内存”。
+
+== 二级命令缓冲
+
+二级命令缓冲可通过 https://www.khronos.org/registry/vulkan/specs/latest/man/html/VkCommandBufferInheritanceInfo.html[VkCommandBufferInheritanceInfo]（随 https://www.khronos.org/registry/vulkan/specs/latest/man/html/VkCommandBufferBeginInfo.html[VkCommandBufferBeginInfo] 传给 https://www.khronos.org/registry/vulkan/specs/latest/man/html/vkBeginCommandBuffer.html[vkBeginCommandBuffer]）继承主命令缓冲的“渲染通道”状态，并设置 `VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT`。此后可并发录制多个二级命令缓冲。
+
+主命令缓冲需在 https://www.khronos.org/registry/vulkan/specs/latest/man/html/vkCmdBeginRenderPass.html[vkCmdBeginRenderPass] 时使用 `VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS`，并在 https://www.khronos.org/registry/vulkan/specs/latest/man/html/vkCmdEndRenderPass.html[vkCmdEndRenderPass] 前通过 https://www.khronos.org/registry/vulkan/specs/latest/man/html/vkCmdExecuteCommands.html[vkCmdExecuteCommands] 执行录制好的二级命令缓冲数组。示例按滑块值拆分不透明物体，再单独提交透明物体与 GUI。
+
+== 多线程录制
+
+要并发录制，框架需“按帧、按线程”管理资源池。Vulkan 规范要求：
+
+* https://www.khronos.org/registry/vulkan/specs/latest/man/html/VkCommandPool.html[_同一命令池不可在多线程并发使用_]；
+* https://www.khronos.org/registry/vulkan/specs/latest/man/html/VkDescriptorPool.html[_同一描述符池不可在多线程同时分配/释放_ ]。
+
+因此队列中的每一帧（如三缓冲）都管理一组池，使每个线程拥有：
+
+* 命令池
+* 描述符池缓存
+* 描述符集缓存
+* 缓冲池
+
+示例使用线程池分发工作。拆分绘制时建议负载均衡；示例允许调整缓冲数量，不能整除时均匀分配，屏幕展示“每缓冲平均 draw 数”。
+
+注意：状态在不同命令缓冲间不复用，因此每个命令缓冲应包含合理数量的 draw，避免 GPU 因命令过碎而空转。过多“少 draw 的二级缓冲”会降低性能；超过 CPU 并行度（缓冲数>线程数）也无益，反之线程数远多于缓冲数也可能影响性能。示例在缓冲数较低时会调整线程池规模，滑块与图表可帮助观察权衡。
+
+NOTE: 教程撰写后，HWCPipe 已不再提供 CPU cycles 计数；可用外部工具测量。
+
+在 draw 调用较多的场景（~1800）下，将工作量分为 8 个缓冲并在 8 线程并行，性能可提升约 15%。
+
+== 复用/回收策略
+
+Vulkan 提供多种管理与分配命令缓冲的方法。本示例比较以下策略：
+
+* 分配-释放（Allocate and Free）
+* 重置单个命令缓冲（Resetting individual command buffers）
+* 重置命令池（Resetting the command pool）
+
+=== 分配-释放
+
+通过 https://www.khronos.org/registry/vulkan/specs/latest/man/html/vkAllocateCommandBuffers.html[vkAllocateCommandBuffers] 从命令池分配命令缓冲，录制并提交执行；可在执行后用 https://www.khronos.org/registry/vulkan/specs/latest/man/html/vkFreeCommandBuffers.html[vkFreeCommandBuffers] 释放。
+
+若命令池未以 `RESET_COMMAND_BUFFER_BIT` 创建，则不会自动回收已删缓冲的内存；而启用该位会为每个缓冲使用独立分配器，相比“池整体重置”增加 CPU 开销。因此频繁分配/释放是最差的策略。
+
+=== 重置单个命令缓冲
+
+使用 https://www.khronos.org/registry/vulkan/specs/latest/man/html/vkResetCommandBuffer.html[vkResetCommandBuffer] 需命令池以 `RESET_COMMAND_BUFFER_BIT` 创建。其代价通常高于“命令池重置”。
+
+=== 重置命令池
+
+用 https://www.khronos.org/registry/vulkan/specs/latest/man/html/vkResetCommandPool.html[vkResetCommandPool] 可一次重置该池分配的所有命令缓冲，并以较低 CPU 开销回收/复用内存。不需 `RESET_COMMAND_BUFFER_BIT`，且避免该位更有利于实现使用单一分配器管理整个池。
+
+=== 相对性能
+
+示例可选择“单缓冲录制全部”或“将不透明物体分配到多个二级缓冲”，后者支持多线程构建，但二级缓冲数不宜过多，其调用成本不低；示例可调节数量以加剧 CPU 绑定，从而更明显地区分三种管理策略。所有命令缓冲均带 `ONE_TIME_SUBMIT_BIT`，提示驱动“执行后不会复用”；若改用 `SIMULTANEOUS_USE_BIT` 可能降低性能。
+
+== 进一步阅读
+
+* xref:samples/performance/multithreading_render_passes/README.adoc[多渲染通道的多线程录制]
+* https://www.khronos.org/registry/vulkan/specs/latest/html/chap6.html#commandbuffer-allocation[命令缓冲的分配与管理]
+* https://www.khronos.org/registry/vulkan/specs/1.0-wsi_extensions/html/chap5.html#commandbuffers-lifecycle[命令缓冲生命周期]
+* “Writing an efficient Vulkan renderer”（GPU Zen 2）
+
+== 最佳实践
+
+- 建议：
+  - 使用二级命令缓冲以便多线程构建渲染通道；
+  - 将每帧的二级命令缓冲调用数保持在合理范围；
+  - 若不复用缓冲，设置 `ONE_TIME_SUBMIT_BIT`；
+  - 若不复用缓冲，周期性调用 `vkResetCommandPool()` 释放内存；
+- 避免：
+  - 仅需整体重置时给命令池设置 `RESET_COMMAND_BUFFER_BIT`；
+  - 在高频路径上调用 `vkResetCommandBuffer()`；
+- 影响：
+  - 二级命令缓冲与不当的创建/标志会增加 CPU 负载；过于频繁的 reset 会增大开销；直到池重置前内存占用更高；
+- 调试：
+  - 评估 `ONE_TIME_SUBMIT_BIT` 之外的每个标志是否必要；
+  - 评估每处 `vkResetCommandBuffer()` 是否可替换为 `vkResetCommandPool()`。

@@ -1,0 +1,64 @@
+////
+- Copyright (c) 2019-2023, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 管线管理（Pipeline Management）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/pipeline_cache[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+Vulkan 允许应用保存管线（图形/计算）的内部表示，以便后续重建同一管线。本示例详细展示管线创建、缓存与管理的实现与性能影响。
+
+== Vulkan 管线
+
+创建图形管线需要：
+- VkShaderModule（VS/FS）
+- VkRenderPass
+- 子通道索引
+- VkPipelineLayout（推常量、描述符集布局）
+- 管线状态（顶点输入/装配、光栅化、深度模板、颜色混合）
+
+计算管线需要：
+- VkShaderModule（CS）
+- VkPipelineLayout（推常量、描述符集布局）
+
+== 管线缓存
+
+管线创建内部需编译 `VkShaderModule`，运行时执行会显著增加帧时。可在 `vkCreateGraphicsPipelines/vkCreateComputePipelines` 传入 `VkPipelineCache`，作为内部表示的复用容器。为跨运行生效，需在退出前用 `vkGetPipelineCacheData` 获取并保存二进制，下次运行以此初始化 `VkPipelineCache`，避免重复编译。
+
+== 资源缓存预热
+
+管线依赖渲染通道、状态、网格与着色器。引擎可在一次运行中记录创建过的对象并在后续运行时预热内部资源缓存。常见做法是以 CreateInfo 成员构造哈希映射到已创建的 Vulkan 对象，后续相同请求直接返回缓存对象。关卡切换或退出时可序列化写盘，下次运行读回反序列化预热。
+
+== 示例
+
+`pipeline_cache` 可启用/禁用管线缓存；销毁现有管线将触发“重新缓存”，期间应用会变慢。实测（Mali G76）：启用缓存时，销毁并重建管线耗时约 24.4ms 且仍可 60FPS；禁用时重建约 50.4ms，几乎翻倍，运行时动态建管线会造成卡顿。
+
+== 最佳实践
+
+- 建议：
+  - 尽早创建已知管线（利用跨运行保存的数据）；
+  - 使用管线缓存降低创建成本；
+- 避免：
+  - 在绘制时无缓存地创建管线（引发性能抖动）；
+- 影响：
+  - 不复用已烘焙状态会增加帧时（含着色器编译等昂贵操作）；
+- 调试：
+  - 帧捕获可观察 `vkCreateGraphics/ComputePipelines` 是否使用了空 `VkPipelineCache`；RenderDoc 的回放中该字段为空属正常。

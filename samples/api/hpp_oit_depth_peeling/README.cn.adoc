@@ -1,0 +1,68 @@
+////
+- Copyright (c) 2024, Google
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 使用 Vulkan-Hpp 的深度剥离 OIT（Order-independent transparency with depth peeling using Vulkan-Hpp）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/hpp_oit_depth_peeling[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+说明：这是 API 示例 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/oit_depth_peeling[OIT depth peeling] 的 HPP 转码版本，展示如何使用由 vulkan.hpp 提供的 Vulkan C{pp} 绑定。请参考原示例以获取更详细的说明。
+
+image::samples/api/oit_depth_peeling/images/sample.png[Sample]
+
+== 概览
+
+本示例实现了一种使用深度剥离（depth peeling）的顺序无关透明（OIT）算法。场景为一枚圆环面（torus），其不透明度可在 UI 中调整，并能得到像素级精确的结果。算法基于 Cass Everitt 的 https://developer.download.nvidia.com/assets/gamedev/docs/OrderIndependentTransparency.pdf[原始论文]。
+
+== 算法
+
+OIT 算法由若干个“收集（gather）”阶段，随后一个“合成（combine）”阶段构成：
+
+- 每个收集阶段渲染一层透明几何。第一阶段渲染第一层、第二阶段渲染第二层，以此类推；
+- 第 N 层由每个像素从前到后排序后的第 N 个片段组成；
+- 合成阶段在屏幕空间进行，从后往前合并图层图像，得到最终结果；
+- 即使几何体相交，该算法也能产生像素级精确的结果；当几何层数超过收集阶段数时，最远层会被跳过，但视觉结果保持稳定（无闪烁）。
+
+== 选项
+
+[cols="2,4,4"]
+|===
+| 选项 | 描述 | 备注
+
+| 摄像机自动旋转
+| 启用摄像机自动旋转
+|
+
+| 背景灰度
+| 指定背景颜色的灰度乘子（0.0 ~ 1.0）
+|
+
+| 物体 Alpha
+| 指定透明物体的不透明度（0.0 ~ 1.0）
+|
+
+| 前层索引
+| 要渲染的第一层（0 ~ 7）
+|
+
+| 后层索引
+| 要渲染的最后一层（0 ~ 7）
+| 不能小于前层索引
+|===

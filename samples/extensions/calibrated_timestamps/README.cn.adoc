@@ -1,0 +1,41 @@
+////
+- Copyright (c) 2023, Holochip Corporation
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 校准时间戳（Calibrated Timestamps）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/calibrated_timestamps[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+本示例演示 `VK_EXT_calibrated_timestamps` 扩展。与“时间戳查询”通常针对整个图形队列（queue）不同，“校准时间戳”可以对任意代码片段进行分析与计时。
+
+== 概览
+
+启用 `VK_EXT_calibrated_timestamps` 需要启用 `VK_KHR_get_physical_device_properties2`。
+
+== 介绍
+
+本示例基于 Vulkan Sample `HDR` 的框架，演示在 `build_command_buffers` 函数范围内使用“校准时间戳”。
+
+== 时间域、时间戳、时间戳周期与最大偏差
+
+通过校准时间戳扩展获取时间戳。通常需要获取两次时间戳来测量一个代码块的耗时。不同时间域的定义与其时间戳周期（timestamp period）的测量方式可能不同；时间戳精度可由“最大偏差（max deviation）”进行校准与评估。
+
+== 获取时间域与时间戳
+
+可通过 `vkGetPhysicalDeviceCalibrateableTimeDomainsEXT` 获取可用的时间域列表；Vulkan 的时间域由枚举 `VkTimeDomainEXT` 定义。

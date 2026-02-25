@@ -1,0 +1,413 @@
+////
+- Copyright 2023-2025 Nintendo
+-
+- Licensed under the Apache License, Version 2.0 (the "License");
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+////
+= 着色器对象（Shader Object）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/shader_object[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/shader_object_screenshot.png[Sample]
+
+== 概览
+
+本示例展示如何使用 `VK_EXT_shader_object` 扩展。该扩展提供了一种无需 `VkPipeline` 对象即可指定着色器与状态的方式。
+
+使用着色器对象进行绘制时，可在命令缓冲上分别为每个阶段设置着色器，并可在调用 `vkCmdDraw*` 之前的任意时刻设置图形状态。
+
+示例为每次绘制调用仅设置最小必要的状态，并仅在下一次绘制需要不同状态时才更新。
+
+在默认配置下，示例会自动遍历着色器与状态的组合，并随机改变以下之一：
+
+* 某个模型的某一阶段使用的着色器
+* 后处理片段着色器
+* 输出颜色格式
+* 输出深度格式
+
+中间的模型展示“链接的顶点/片段着色器”的用法，它们只能成对变更。周围的模型则使用未链接的着色器，每个模型使用各自独立的顶点、片段以及（可能的）几何着色器。
+
+默认启用的后处理会将指定的视觉效果应用到模型渲染结果上。
+
+如果设备支持，可启用可选的线框模式。
+
+本示例通过调试 GUI 在运行时配置。该 UI 允许改变一些使用传统管线动态控制不太实际的场景方面。UI 的绘制也展示了在常规渲染通道（用于渲染 UI）与动态渲染下的着色器对象（用于渲染场景）之间的互操作。
+
+底部显示最近 2000 帧的 CPU 帧时图，以展示运行时切换着色器与状态对 CPU 的影响。
+
+着色器对象只能在 `VK_KHR_dynamic_rendering` 渲染通道内使用。参见 link:../dynamic_rendering[动态渲染] 示例获取该扩展的更多细节。与着色器对象绘制相关的主要 API 为 `vkCmdBeginRenderingKHR` 与 `vkCmdEndRenderingKHR`。
+
+== 启用扩展
+
+要使用着色器对象，必须在 `VkDevice` 上启用 `VK_EXT_shader_object` 扩展与 `shaderObject` 特性。这需要在 ``VkDeviceCreateInfo`` 的 `ppEnabledExtensionNames` 中包含 `VK_EXT_SHADER_OBJECT_EXTENSION_NAME`，并在其 `pNext` 链中包含 `VkPhysicalDeviceShaderObjectFeaturesEXT` 且将 `shaderObject` 设为 `VK_TRUE`。
+
+在本仓库中，这些通过与其他示例共享的通用抽象完成：
+
+[,CPP]
+----
+add_device_extension(VK_EXT_SHADER_OBJECT_EXTENSION_NAME);
+----
+
+[,CPP]
+----
+// 启用 Shader Object
+auto &requestedShaderObject        = gpu.request_extension_features<VkPhysicalDeviceShaderObjectFeaturesEXT>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT);
+requestedShaderObject.shaderObject = VK_TRUE;
+----
+
+== 创建着色器对象
+
+使用 `vkCreateShadersEXT` 创建 `VkShaderEXT` 对象：
+
+[,CPP]
+----
+VkResult vkCreateShadersEXT(
+    VkDevice                     device,
+    uint32_t                     createInfoCount,
+    const VkShaderCreateInfoEXT* pCreateInfos,
+    const VkAllocationCallbacks* pAllocator,
+    VkShaderEXT*                 pShaders);
+----
+
+在示例中，着色器被抽象为一个 `Shader` 类，用于持有创建出的 `VkShaderEXT` 对象以及构建与绑定所需的信息：
+
+[,CPP]
+----
+class Shader
+{
+    VkShaderStageFlagBits stage;
+    VkShaderStageFlags    next_stage;
+    VkShaderEXT           shader      = VK_NULL_HANDLE;
+    std::string           shader_name = "shader";
+    VkShaderCreateInfoEXT vk_shader_create_info;
+    std::vector<uint32_t> spirv;
+
+    // ...
+}
+----
+
+场景包含多个模型，每个模型都使用多个 `Shader` 对象。
+
+== 链接的着色器
+
+若已知某组着色器总会一起使用，则可将其“链接”。链接后的着色器允许驱动执行跨阶段优化，从而提升着色器的 GPU 执行性能。
+
+示例中的一个链接用法是天空盒。天空盒仅使用 VS 与 FS：
+- 顶点着色器阶段设为 `VK_SHADER_STAGE_VERTEX_BIT`，其“下一阶段”仅为 `VK_SHADER_STAGE_FRAGMENT_BIT`；
+- 片段着色器阶段设为 `VK_SHADER_STAGE_FRAGMENT_BIT`，无下一阶段。
+
+使用着色器对象进行绘制，需要为每个着色器阶段创建一个 `VkShaderEXT`，即为每个阶段各有一个 `Shader` 实例：
+
+[,CPP]
+----
+// 创建着色器并设定当前/下一阶段、GLSL 源、描述符集与推常量
+skybox_vert_shader = new Shader(VK_SHADER_STAGE_VERTEX_BIT,
+                                VK_SHADER_STAGE_FRAGMENT_BIT,
+                                "skybox vert",
+                                vert_shader_data,
+                                &descriptor_set_layouts[ShaderTypeBasic],
+                                &push_constant_ranges[ShaderTypeBasic]);
+skybox_frag_shader = new Shader(VK_SHADER_STAGE_FRAGMENT_BIT,
+                                0,
+                                "skybox frag",
+                                frag_shader_data,
+                                &descriptor_set_layouts[ShaderTypeBasic],
+                                &push_constant_ranges[ShaderTypeBasic]);
+----
+
+`Shader` 构造函数需要完整的 `VkShaderCreateInfoEXT`（包含编译 GLSL 所需信息）。构造函数会编译 GLSL 并填充该结构：
+
+[,CPP]
+----
+ShaderObject::Shader::Shader(VkShaderStageFlagBits stage_,
+                             VkShaderStageFlags    next_stage_,
+                             std::string           shader_name_,
+                             const std::vector<uint8_t> & vert_glsl_source,
+                             const VkDescriptorSetLayout *pSetLayouts,
+                             const VkPushConstantRange *  pPushConstantRange)
+{
+    stage       = stage_;
+    shader_name = shader_name_;
+    next_stage  = next_stage_;
+
+	// 编译 GLSL 源
+	if (!glsl_compiler.compile_to_spirv(stage, vert_glsl_source, "main", {}, spirv, info_log))
+	{
+		LOGE("Failed to compile shader, Error: {}", info_log.c_str());
+	}
+
+	// 填充创建信息
+	vk_shader_create_info.sType                  = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+	vk_shader_create_info.pNext                  = nullptr;
+	vk_shader_create_info.flags                  = 0;
+	vk_shader_create_info.stage                  = stage;
+	vk_shader_create_info.nextStage              = next_stage;
+	vk_shader_create_info.codeType               = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+	vk_shader_create_info.codeSize               = spirv.size() * sizeof(spirv[0]);
+	vk_shader_create_info.pCode                  = spirv.data();
+	vk_shader_create_info.pName                  = "main";
+	vk_shader_create_info.setLayoutCount         = 1;
+	vk_shader_create_info.pSetLayouts            = pSetLayouts;
+	vk_shader_create_info.pushConstantRangeCount = 1;
+	vk_shader_create_info.pPushConstantRanges    = pPushConstantRange;
+	vk_shader_create_info.pSpecializationInfo    = nullptr;
+}
+----
+
+为使天空盒的 VS/FS 作为链接组合使用，需要在两者的 `VkShaderCreateInfoEXT` 中添加 `VK_SHADER_CREATE_LINK_STAGE_BIT_EXT`。示例在创建阶段通过调用 `build_shader` 或 `build_linked_shaders` 来决定是否加上该标志：
+
+[,CPP]
+----
+// 将 FS 标记为链接并构建
+build_linked_shaders(device, skybox_vert_shader, skybox_frag_shader);
+----
+
+构建时，对两个 `VkShaderCreateInfoEXT` 添加 `VK_SHADER_CREATE_LINK_STAGE_BIT_EXT`，然后一起调用 `vkCreateShadersEXT`：
+
+[,CPP]
+----
+void ShaderObject::build_linked_shaders(VkDevice device, ShaderObject::Shader *vert, ShaderObject::Shader *frag)
+{
+	VkShaderCreateInfoEXT shader_create_infos[2];
+
+	if (vert == nullptr || frag == nullptr)
+	{
+		LOGE("build_linked_shaders failed with null vertex or fragment shader\n");
+	}
+
+	shader_create_infos[0] = vert->get_create_info();
+	shader_create_infos[1] = frag->get_create_info();
+
+	for (auto &shader_create : shader_create_infos)
+	{
+		shader_create.flags |= VK_SHADER_CREATE_LINK_STAGE_BIT_EXT;
+	}
+
+	VkShaderEXT shaderEXTs[2];
+
+	// 创建着色器对象
+	VkResult result = vkCreateShadersEXT(device,
+	                                     2,
+	                                     shader_create_infos,
+	                                     nullptr,
+										 shaderEXTs);
+
+	if (result != VK_SUCCESS)
+	{
+		LOGE("vkCreateShadersEXT failed\n");
+	}
+
+	vert->set_shader(shaderEXTs[0]);
+	frag->set_shader(shaderEXTs[1]);
+}
+----
+
+== 未链接的着色器
+
+链接是可选的。在某些用例下，使用未链接着色器更合适：可在命令缓冲记录时任意组合，但需注意驱动跨阶段优化能力可能降低。
+
+要一起使用某个未链接组合，其输入/输出接口需兼容，且描述符集布局与推常量数组必须一致。
+
+场景中部分模型使用未链接着色器。为便于描述，示例将这些模型称为“材质模型”。每个材质模型绑定不同的 VS、GS 与 FS；每个 VS 可与任一 GS/FS 搭配。
+
+示例允许通过 UI 禁用几何阶段，因此所有 VS 均支持“下一阶段”为几何或片段。对应地，VS 创建时的下一阶段标志为 `VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT`，并设定 GLSL、描述符与推常量：
+
+[,CPP]
+----
+// 创建着色器，设置当前/下一阶段并填充 GLSL、描述符与推常量
+material_vert_shaders.emplace_back(
+    new Shader(VK_SHADER_STAGE_VERTEX_BIT,
+               VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+               shader_name.substr(unlinked_material_prefix_size, shader_name.length() - (unlinked_material_prefix_size + frag_suffix_size)),
+               shader_data,
+               &descriptor_set_layouts[ShaderTypeMaterial],
+               &push_constant_ranges[ShaderTypeMaterial]));
+----
+
+随后单独构建该着色器（与天空盒的不同之处在于分别创建 `VkShaderEXT`）：
+
+[,CPP]
+----
+// 构建着色器
+build_shader(device, material_vert_shaders.back());
+----
+
+`build_shader` 与 `build_linked_shaders` 类似，但仅创建一个 `VkShaderEXT`：
+
+[,CPP]
+----
+void ShaderObject::build_shader(VkDevice device, ShaderObject::Shader *shader)
+{
+	VkShaderEXT shaderEXT;
+	VkShaderCreateInfoEXT shaderCreateInfo = shader->get_create_info();
+
+	VkResult result = vkCreateShadersEXT(device, 1, &shaderCreateInfo, nullptr, &shaderEXT);
+
+	if (result != VK_SUCCESS)
+	{
+		LOGE("vkCreateShadersEXT failed\n");
+	}
+
+	shader->set_shader(shaderEXT);
+}
+----
+
+== 绑定着色器
+
+`VkShaderEXT` 需在执行 `vkCmdDraw*` 前绑定到命令缓冲。可使用 `vkCmdBindShadersEXT` 绑定一个或多个对象。
+
+绘制天空盒前，绑定对应的 `VkShaderEXT`：
+
+[,CPP]
+----
+// 绑定天空盒着色器
+bind_shader(draw_cmd_buffer, skybox_vert_shader);
+bind_shader(draw_cmd_buffer, skybox_frag_shader);
+----
+
+[,CPP]
+----
+void ShaderObject::bind_shader(VkCommandBuffer cmd_buffer, ShaderObject::Shader *shader)
+{
+	vkCmdBindShadersEXT(cmd_buffer, 1, shader->get_stage(), shader->get_shader());
+}
+----
+
+未链接着色器通过多次调用 `bind_shader` 进行绑定：
+
+[,CPP]
+----
+void ShaderObject::bind_material_shader(VkCommandBuffer cmd_buffer, int shader_index)
+{
+	CurrentShader &shader = current_material_shaders[shader_index];
+
+	bind_shader(cmd_buffer, material_vert_shaders[shader.vert]);
+	if (enable_geometry_pass)
+		bind_shader(cmd_buffer, material_geo_shaders[shader.geo]);
+	bind_shader(cmd_buffer, material_frag_shaders[shader.frag]);
+}
+----
+
+也可以设计 `Shader` 类在一次 `vkCmdBindShadersEXT` 调用中绑定所有 `VkShaderEXT` 对象。
+
+== 解绑着色器
+
+可通过 `vkCmdBindShadersEXT` 将 `pShaders` 设为 `nullptr`，并在 `pStages` 中指定要解绑的阶段，实现解绑。
+
+示例仅在部分绘制中使用几何着色器，因此需在无几何阶段的绘制前解绑它：
+
+[,CPP]
+----
+// 通过向几何阶段绑定 nullptr 来解绑几何着色器
+VkShaderStageFlagBits geo_stage = VK_SHADER_STAGE_GEOMETRY_BIT;
+vkCmdBindShadersEXT(draw_cmd_buffer, 1, &geo_stage, nullptr);
+----
+
+在使用着色器对象进行绘制前，应用必须为设备启用的每个着色器阶段绑定 `nullptr` 或有效的 `VkShaderEXT`。由于首次绘制前未绑定几何阶段着色器，因此需要为其绑定 `nullptr`。上述代码同样适用。
+
+本示例未启用 `tessellationShader` 设备特性，因此无需为两条细分阶段绑定任何对象。
+
+== 状态设置与绘制
+
+Vulkan 规范“https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#shaders-objects[Shader Objects]”章节中的“https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#shaders-objects-state[Setting State]”子节列出了在绑定图形着色器对象后、调用 `vkCmdDraw*` 之前需要在命令缓冲上设置的图形状态。
+
+本示例展示了一种利用这些规则、最小化进入驱动调用次数的方法。
+
+示例的通用与必需状态（如顶点输入绑定描述）在首次绘制前通过 `set_initial_state` 设置；与特定绘制相关的状态按需设置。
+
+例如绘制天空盒时禁用剔除并禁止写入深度：
+
+[,CPP]
+----
+// 禁用深度写入并关闭剔除以绘制天空盒
+vkCmdSetCullModeEXT(draw_cmd_buffer, VK_CULL_MODE_NONE);
+vkCmdSetDepthWriteEnableEXT(draw_cmd_buffer, VK_FALSE);
+----
+
+随后绑定描述符集与推常量：
+
+[,CPP]
+----
+// 绑定天空盒的描述符与推常量
+glm::mat4 model_matrix = glm::mat4(1.0f);
+vkCmdBindDescriptorSets(draw_cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout[ShaderTypeBasic], 0, 1, &descriptor_sets[ShaderTypeBasic], 0, nullptr);
+vkCmdPushConstants(draw_cmd_buffer, pipeline_layout[ShaderTypeBasic], VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(BasicPushConstant), &model_matrix);
+----
+
+最后绑定着色器并绘制模型：
+
+[,CPP]
+----
+// 绑定天空盒着色器
+bind_shader(draw_cmd_buffer, skybox_vert_shader);
+bind_shader(draw_cmd_buffer, skybox_frag_shader);
+
+// 绘制天空盒模型
+draw_model(skybox, draw_cmd_buffer);
+----
+
+随后绘制的模型需要不同的状态：
+
+[,CPP]
+----
+vkCmdSetCullModeEXT(draw_cmd_buffer, VK_CULL_MODE_BACK_BIT);
+vkCmdSetDepthWriteEnableEXT(draw_cmd_buffer, VK_TRUE);
+----
+
+绑定未链接着色器的流程与链接着色器一致：先设状态、绑定描述符集与推常量，再绑定着色器并绘制模型：
+
+[,CPP]
+----
+// 更新并推送 cube 1 的推常量
+material_push_constant.model = glm::translate(glm::vec3(1.2f, -1.f, 0)) * glm::rotate((float) elapsed_time, glm::vec3(0, 1, 0)) * glm::scale(glm::vec3(0.05f));
+vkCmdPushConstants(draw_cmd_buffer, pipeline_layout[ShaderTypeMaterial],
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0, sizeof(MaterialPushConstant), &material_push_constant);
+
+// 绑定材质模型 2 的着色器
+bind_material_shader(draw_cmd_buffer, 2);
+
+// 绘制 cube 1
+draw_model(cube, draw_cmd_buffer);
+----
+
+在完成天空盒、地形与其他模型的渲染后，将对中间图像应用可选后处理，并最终输出到屏幕。
+
+== 运行时选项
+
+调试 UI 允许在运行时动态控制渲染的多个方面：可按模型切换着色器、改变颜色与深度输出格式以及后处理效果。使用传统管线实现如此高的动态性不太现实（数以万计的状态排列组合可能各自需要一条管线），而着色器对象对这类架构更为自然。
+
+== 仿真层
+
+Vulkan SDK 提供了一个 https://github.com/KhronosGroup/Vulkan-ExtensionLayer/blob/main/docs/shader_object_layer.md[仿真层]，可在尚未原生支持该扩展的驱动上使用 `VK_EXT_shader_object`。该层适用于希望使用着色器对象、但不愿为旧驱动实现“基于管线的回退路径”的应用。你可以随应用一同分发该层；若驱动已原生支持该扩展，仿真层会自动禁用。
+
+可通过在 `VkDeviceCreateInfo` 的 `ppEnabledLayerNames` 中添加 `VK_LAYER_KHRONOS_shader_object` 来启用该层。与启用扩展类似，示例通过通用抽象完成：
+
+[,CPP]
+----
+	add_instance_layer("VK_LAYER_KHRONOS_shader_object");
+----
+
+由于无法假设终端用户系统安装了 Vulkan SDK，示例的层加载方式不适用于真实应用。实际应随应用分发该层。常见做法包括将 SDK 中的 `VkLayer_khronos_shader_object.dll` 与 `VkLayer_khronos_shader_object.json` 复制到应用可执行文件所在目录，并在首次调用 Vulkan API 前将其路径追加到 `VK_LAYER_PATH` 环境变量。无论如何分发，层的加载始终由 Vulkan Loader 负责，因此这些文件必须对 Loader 可访问。
+
+== 参考资料
+
+* https://www.khronos.org/blog/you-can-use-vulkan-without-pipelines-today[无需管线也可使用 Vulkan]
+* https://docs.vulkan.org/features/latest/features/proposals/VK_EXT_shader_object.html[扩展提案]
+* https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#shaders-objects[规范]
+* https://github.com/KhronosGroup/Vulkan-ExtensionLayer/blob/main/docs/shader_object_layer.md[仿真层]
+
+== 小结
+
+对于高度动态、难以通过管线实现的应用架构，着色器对象可显著简化着色器与状态管理。随着驱动支持的不断普及与仿真层的补充，适合该架构的应用完全可以围绕着色器对象而非传统管线进行设计，并有望获得不逊于、甚至优于基于管线实现的用户体验。

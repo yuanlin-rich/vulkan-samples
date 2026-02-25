@@ -1,0 +1,125 @@
+////
+- Copyright (c) 2020-2023, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 在应用中使用显式 16 位运算（Using explicit 16-bit arithmetic in applications）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/16bit_arithmetic[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+在移动 GPU 领域，`mediump` 常被用作关键的性能与带宽优化。桌面 GPU/API 过去对“原生 16 位运算”的支持有限，但近年架构中该能力（尤其 FP16）已逐步普及。本示例演示 `VK_KHR_shader_float16_int8`，它为 FP16（以及 INT8）算术提供标准化支持。
+
+== 启用 16 位浮点算术支持
+
+启用扩展 `VK_KHR_shader_float16_int8`，并在 `vkGetPhysicalDeviceFeatures2` 中链入 `VkPhysicalDeviceShaderFloat16Int8Features`，检查并按需启用：
+
+- `shaderFloat16`
+- `shaderInt8`
+
+启用后可在 SPIR-V 中使用 `Float16` 与 `Int8` 能力。注意这不包含 16/8 位“存储”支持；16 位存储参见 `VK_KHR_16bit_storage`。
+
+=== 8 位算术？
+该扩展也支持 8 位整数算术，但本示例未涵盖。
+
+=== 16 位整数？
+Vulkan 1.0 已提供 `shaderInt16` 特性。
+
+== 启用 16 位存储支持
+
+使用 16 位算术时，往往也希望在缓冲中使用 16 位值。本示例同时展示在 SSBO 与推常量中使用 16 位存储。需要启用 `VK_KHR_16bit_storage` 与其依赖 `VK_KHR_storage_buffer_storage_class`。在 `VkPhysicalDevice16BitStorageFeatures` 中启用：
+
+- `storageBuffer16BitAccess`
+- `storagePushConstant16`
+
+== 示例：16 位算术
+
+示例通过大量 FP16 浮点运算“压榨”算力，以观察算术吞吐提升。它以完全“蛮力”的方式生成程序化彩环，为了动画效果，彩环在屏幕中移动/变化。这并非高效的渲染方式，反而刻意夸大每像素的计算量，以将“算术吞吐”孤立成瓶颈。
+
+image::./images/blobs_result_fp32.jpg[32-bit arithmetic]
+
+关键开销（FP32 版本，节选）：
+
+[,glsl]
+----
+vec4 compute_blob(vec2 pos, vec4 blob, float seed)
+{
+    vec2 offset = pos - blob.xy;
+    vec2 s_offset = offset * (1.1 + seed);
+    vec2 r_offset = offset * 0.95;
+    vec2 g_offset = offset * 1.0;
+    vec2 b_offset = offset * 1.05;
+
+    float r_dot = dot(r_offset, r_offset);
+    float g_dot = dot(g_offset, g_offset);
+    float b_dot = dot(b_offset, b_offset);
+    float s_dot = dot(s_offset, s_offset);
+
+    vec4 dots = vec4(r_dot, g_dot, b_dot, s_dot) * blob.w;
+
+    // FMAs...
+    dots = dots * dots + dots; // ×6 次
+    ...
+    return parabolas;
+}
+----
+
+image::./images/blobs_result_fp16.jpg[16-bit arithmetic]
+
+FP16 版本中，改写为尽可能“纯 FP16”：
+
+[,glsl]
+----
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+f16vec4 compute_blob(f16vec2 pos, f16vec4 blob, float16_t seed)
+{
+    f16vec2 offset = pos - blob.xy;
+    ...
+    f16vec4 dots = ... * blob.w;
+    // 同样的 FMA 链
+    return parabolas;
+}
+----
+
+== 显式 16 位 vs `mediump` / `RelaxedPrecision`
+
+显式且标准化的 16 位算术在图形 API 中是较新的能力；而 `mediump` 对移动端（OpenGL ES）开发者更熟悉，在 SPIR-V 中对应 `RelaxedPrecision`。问题在于：你无法确定驱动是否真正采纳了该精度限定——它只是“允许使用 FP16，编译器也可忽略而用 FP32”。这会造成跨设备结果不一致。
+
+若使用“显式 FP16”，设备必须真正以 FP16 执行，不存在猜测。Vulkan GLSL 在桌面档也支持 `mediump`，部分桌面驱动/GPU 会据此降精度。是一条可行路径，优点是无需为 FP16/FP32 维护多套变体（并非所有设备都支持显式 FP16）。在常规片段着色器场景，`mediump` 可减少变体爆炸，但需接受跨设备结果差异。显式 FP16 更适合计算工作负载（便于专门调优）。
+
+== FP16 的“隐性收益”：降低寄存器压力
+
+更小的算术类型不仅可能提升吞吐，还能减少寄存器占用，从而提升并发、掩蔽延迟；对共享内存的占用也更低。具体收益依赖硬件与编译器，建议配合厂商工具或 `VK_KHR_pipeline_executable_properties` 观察寄存器用量/占用率。
+
+== 最佳实践
+
+- 建议：
+  - 当算术吞吐或寄存器压力成为问题时，考虑 FP16；并认真基准测试。
+  - 若不便于维护 FP16/FP32 变体（尤其片段着色器），可考虑 `mediump/RelaxedPrecision`；而计算着色器更适合显式 FP16。
+  - 使用 FP16 时尽量向量化（f16vec2/f16vec4），许多 GPU 通过“打包 f16x2”获得性能；标量 float16_t 收益有限。
+  - 使用 `mediump` 时务必在多实现上测试，评估精度损失与可接受性。
+- 避免：
+  - 频繁在 FP16 与 FP32 之间转换（存在额外代价）。
+  - 未经广泛测试就依赖 `mediump`。
+- 影响：
+  - 不利用 FP16 可能错失潜在优化空间，也可能导致占用过高、难以隐藏内存/纹理延迟。
+- 调试：
+  - 算术吞吐依赖性能分析器；占用/寄存器等可借助离线编译、厂商工具或 `VK_KHR_pipeline_executable_properties`。

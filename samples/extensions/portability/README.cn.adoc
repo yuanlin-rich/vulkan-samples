@@ -1,0 +1,62 @@
+////
+- Copyright (c) 2022-2025, Holochip
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= Vulkan 可移植性子集扩展（Vulkan Portability Extension）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/portability[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+本教程与示例展示 `VK_KHR_portability_subset` 扩展的用法。当在 `Instance` 中设置 `VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR` 时，Vulkan 会将诸如 https://github.com/KhronosGroup/MoltenVK[MoltenVK] 等“非完全一致”的实现视作“可用实现”。此时可通过 `vkGetPhysicalDeviceFeatures2` 链接 `VkPhysicalDevicePortabilitySubsetPropertiesKHR` 查询支持/不支持的特性。
+
+该扩展目前为 Khronos Beta 扩展，需在构建时定义 `VK_ENABLE_BETA_EXTENSIONS`。它提供在“非一致实现”上哪些 Vulkan 部分可用/不可用的列表。
+
+== 设置
+
+注意：在框架中全局启用（见 framework/core/instance.cpp 中的 Instance）。为所有示例启用可定义 `VKB_ENABLE_PORTABILITY`。
+
+在实例层添加扩展以启用可移植性子集；设备实例也可用于筛选“可移植性子集启用”的设备项。与其他扩展相同，启用前应检查可用性：
+
+[,cpp]
+----
+uint32_t instance_extension_count;
+VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, nullptr));
+...
+if (strcmp(available_extension.extensionName, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME) == 0) {
+    extensions.push_back(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+}
+----
+
+=== 查询设备支持的特性
+
+NB：`VkPhysicalDevicePortabilitySubsetFeaturesKHR` 仅在定义 `VK_ENABLE_BETA_EXTENSIONS` 下可用。
+
+[,cpp]
+----
+VkPhysicalDevicePortabilitySubsetFeaturesKHR portability_features{};
+portability_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR;
+
+VkPhysicalDeviceFeatures2 device_features{};
+device_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+device_features.pNext = &portability_features;
+vkGetPhysicalDeviceFeatures2(get_device().get_gpu().get_handle(), &device_features);
+----
+
+随后即可根据填充结果判断哪些特性/行为受限。

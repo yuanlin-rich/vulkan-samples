@@ -1,0 +1,124 @@
+////
+- Copyright (c) 2025-2026, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 图常量（Graph Constants）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/extensions/tensor_and_data_graph/graph_constants[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/sample.png[Sample]
+
+== 概览
+
+本示例是该系列的第二个示例，承接 xref:samples/extensions/tensor_and_data_graph/simple_tensor_and_data_graph/README.adoc[`simple_tensor_and_data_graph`]。前述示例的信息在此均适用并作为基础。本示例引入“图常量（graph constants）”，在一个简单的卷积神经网络中作为权重与偏置使用。
+
+== 环境准备
+
+如需构建与运行本示例，请先按照 xref:samples/extensions/tensor_and_data_graph/README.adoc[张量与数据图] 页面中的步骤完成环境准备。
+
+== 介绍
+
+本示例演示如何运行一个简单的 2D 卷积网络，它消费一个输入张量、常量权重与常量偏置。为在窗口中显示输入与输出张量的内容，网络执行后运行一条计算着色器将两者“绘制”到图像中并 blit 到窗口。下图展示整体流程：
+
+image:./images/flow.svg[Sample]
+
+== 图常量
+
+“图常量”是其值在管线创建时提供且之后不可改变的资源。它们拥有一个整数 ID，可被 SPIR-V 模块中的 ML 程序引用。
+
+=== SPIR-V
+
+如下是在 SPIR-V 模块中定义图常量的方式：
+
+[source,cpp,options="nowrap"]
+----
+  %type = OpTypeTensorARM %float %uint_4 %uint_array_l4_3_3_3_3
+   %cst = OpGraphConstantARM %type 0
+----
+
+`%cst` 为定义出的常量，`%type` 为其类型（通常是张量类型），`0` 为该常量的唯一标识符。该标识符用于在 C++ 代码中为该常量提供具体数据。
+
+上述常量随后可用于其他 SPIR-V 指令（例如 `CONV2D` 算子）：
+
+[source,cpp,options="nowrap"]
+----
+  %conv = OpExtInst ... %tosa CONV2D ... %cst ...
+----
+
+完整 SPIR-V 代码见 link:../../../../shaders/tensor_and_data_graph/spirv/conv2d.spvasm[conv2d.spvasm]。
+
+=== API 用法
+
+在调用 `vkCreateDataGraphPipelinesARM` 创建数据图管线时提供常量张量。每个常量的原始数据以宿主指针（host pointer）形式给出，由实现拷贝并按需使用。
+
+以下为为 CONV2D 层的“权重张量”提供常量数据的示例：
+
+[source,cpp,options="nowrap"]
+----
+std::vector<int64_t> dimensions = {3, 3, 3, 3};
+
+VkTensorDescriptionARM tensor_description =
+{
+    VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
+    nullptr,
+    VK_TENSOR_TILING_LINEAR_ARM,
+    VK_FORMAT_R32_SFLOAT,
+    dimensions.size(),
+    dimensions.data(),
+    nullptr,        // pStrides
+    VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM
+};
+
+std::vector<float> constant_data = {
+    // ...
+};
+
+VkDataGraphPipelineConstantARM pipeline_constant =
+{
+    VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_CONSTANT_ARM,
+    &tensor_description,
+    0,                                                   // 与 SPIR-V 中 OpGraphConstantARM 的 ID 对应
+    constant_data.data()                                 // 宿主数据指针
+};
+
+VkDataGraphPipelineCreateInfoARM pipeline_create_info
+    {VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_CREATE_INFO_ARM};
+pipeline_create_info.pNext             = &pipeline_shader_module_create_info;
+pipeline_create_info.layout            = layout;
+pipeline_create_info.resourceInfoCount = resource_infos.size();
+pipeline_create_info.pResourceInfos    = resource_infos.data();
+
+// 指定图常量
+pipeline_create_info.constantCount = 1;
+pipeline_create_info.pConstants = &pipeline_constant;
+
+VK_CHECK(vkCreateDataGraphPipelinesARM(get_device().get_handle(),
+                                       VK_NULL_HANDLE,
+                                       VK_NULL_HANDLE,
+                                       1,
+                                       &pipeline_create_info,
+                                       nullptr,
+                                       &get_handle()));
+----
+
+注意：管线创建完成后，无需继续保持该宿主指针存活。
+
+== 小结
+
+本示例讲解了如何将图常量（权重与偏置）添加到一个简单的神经网络中。

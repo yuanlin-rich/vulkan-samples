@@ -1,0 +1,28 @@
+////
+- Copyright (c) 2020-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 推送描述符（Push Descriptors, HPP）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/hpp_push_descriptors[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+*扩展*：https://www.khronos.org/registry/vulkan/specs/latest/html/vkspec.html#VK_KHR_push_descriptor[`VK_KHR_push_descriptor`]
+
+推送描述符将“推送常量”的理念应用到“描述符集”。本示例不为每个对象创建描述符集，而是在“录制命令缓冲”时直接传递描述符。

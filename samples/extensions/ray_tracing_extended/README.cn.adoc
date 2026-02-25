@@ -1,0 +1,79 @@
+////
+- Copyright (c) 2019-2023, Holochip Corporation
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 光线追踪：扩展特性与动态对象
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/ray_tracing_extended[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+本示例展示如何在光线追踪场景中引入动画，并处理加速结构中不同类型的动态对象。
+
+== 加速结构（AS）
+
+光线追踪加速结构分为 BLAS（底层）与 TLAS（顶层）。BLAS 描述每个对象在自身坐标系下的几何信息（由顶点/索引缓冲构建）；TLAS 描述几何体实例及其变换（缩放/旋转/平移等）。每个对象需在 BLAS 表示，但可拥有多个实例（各自独立变换），从而无需为每个实例单独构建 AS。
+
+== 对象类型：静态、运动、几何变化
+
+按更新方式可分为：
+- 静态几何（如 Sponza 场景）——单实例不移动；
+- 仅变换的动态对象（如火焰粒子效果的广告牌：仅位置/旋转变化，几何不变，BLAS 不变）；
+- 几何+变换均变化的对象（如折射模型：每帧更新内部几何并朝向视点旋转）。
+
+在 `VkAccelerationStructureBuildGeometryInfoKHR` 中可通过标志选择“追踪优先”（VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR，适合一次构建、多次追踪的静态对象）或“构建优先”（VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR，适合每帧更新的动态对象）。
+
+进一步优化：折射模型每帧由 CPU 更新，使用主机可见内存；Sponza/广告牌使用 staging 复制至设备本地内存。也可用计算着色器逐帧生成折射几何（本文不展开）。
+
+== 在最近命中着色器引用对象数据
+
+AS 不存用户自定义的几何信息，可由开发者自定义并按实例/对象/图元粒度组织：
+
+- 按实例：TLAS 实例可携带自定义 ID；
+- 按对象：本示例用自定义 ID 引用对象级数据（顶点/索引在缓冲中的偏移、纹理索引、对象类型等）：
+
+----
+struct SceneInstanceData {
+    uint32_t vertex_index;
+    uint32_t indices_index;
+    uint32_t image_index;
+    uint32_t object_type;
+};
+----
+
+- 按图元/顶点：示例将法线与纹理坐标编码进顶点结构。通过 `VkAccelerationStructureGeometryKHR` 指定顶点步长与偏移，使 BLAS 能引用自定义布局：
+
+----
+acceleration_structure_geometry.geometry.triangles.vertexData   = vertex_data_device_address;
+acceleration_structure_geometry.geometry.triangles.maxVertex    = model_buffer.num_vertices;
+acceleration_structure_geometry.geometry.triangles.vertexStride = sizeof(NewVertex);
+acceleration_structure_geometry.geometry.triangles.indexType    = VK_INDEX_TYPE_UINT32;
+acceleration_structure_geometry.geometry.triangles.indexData    = index_data_device_address;
+acceleration_structure_geometry.geometry.triangles.transformData = transform_matrix_device_address;
+----
+
+== 纹理绑定与着色器
+
+光栅管线可按对象分批绑定纹理；光追管线中一次渲染可能命中多个对象，因此需在着色器侧可用所有纹理。示例绑定 `sampler2D[]` 纹理数组，并在对象数据中存储纹理索引。
+
+== 环境光遮蔽（AO）与光追阴影
+
+示例展示两种逐帧更新的光照：
+- 光追阴影：从命中点向光源方向发射阴影射线，若返回距离小于命中点到光源距离，则处于阴影中；
+- AO：以命中点法线为极轴在半球分布发射射线，依据与最近命中距离估计遮蔽；示例采用线性插值至阈值（而非硬阈值）。
+
+可进一步优化：减少 AO 射线数量（甚至单射线）并使用后续去噪 Pass（本文不展开）。

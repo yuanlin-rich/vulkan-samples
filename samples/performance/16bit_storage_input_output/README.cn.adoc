@@ -1,0 +1,110 @@
+////
+- Copyright (c) 2020-2023, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 在平铺架构上用 16 位存储 InputOutput 降低带宽（Using 16-bit storage InputOutput feature to reduce bandwidth on tile-based architectures）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/16bit_storage_input_output[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+在诸如 Arm Mali 等“平铺延迟渲染器（TBDR）”架构上，顶点着色与片段着色被拆分为两个阶段。顶点阶段与通用几何管线会为每个可见顶点写入：
+- 位置（`gl_Position`）
+- 顶点输出数据（`layout(location = N) out`）
+- 后续光栅化所需的 GPU 特定数据结构
+
+片段阶段读取这些位置与数据结构以完成图元的光栅化；每个片段调用时，顶点输出数据将作为输入变量供片段着色器读取。上述过程都会消耗带宽。
+
+顶点输出由应用控制，且常占用大量字节，应尽量降低其带宽。该示例展示了一个简单场景下的实际带宽节省效果。
+
+== 启用 16 位存储扩展
+
+`VK_KHR_16bit_storage` 包含多个特性；本示例聚焦 `storageInputOutput16`。该扩展在 Vulkan 1.1 中已并入核心（无需扩展），但你仍需启用计划使用的具体特性。
+
+首先在 `vkGetPhysicalDeviceFeatures2` 的 `pNext` 链中添加 `VkPhysicalDevice16BitStorageFeatures`，检查并按需启用：
+- `storageBuffer16BitAccess`：在 SSBO 中使用“真实 16 位”值
+- `uniformAndStorageBuffer16BitAccess`：在 UBO 中也使用“真实 16 位”值
+- `storagePushConstant16`：在推常量中使用“真实 16 位”值（空间紧张时很有用）
+- `storageInputOutput16`：TBDR 友好，允许在着色器输入/输出接口中使用“真实 16 位”值
+
+要使用这些特性，确保在 `vkCreateDevice` 的 `pNext` 链中传递 `VkPhysicalDevice16BitStorageFeatures`。
+
+=== 存储 vs 算术支持的差异
+
+16 位支持包含“存储”与“算术”两方面：
+- 存储支持：目标是降低带宽与内存占用；
+- 算术支持：目标是提升算术吞吐；
+本示例仅关注“存储”，不会启用 16 位算术相关特性。若设备仅支持 16 位“存储”不支持“算术”，编写着色器时需注意：原生 16 位类型仅用于“存/取”，算术仍在 FP32 进行。例如：
+
+[,glsl]
+----
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+layout(location = 0) out f16vec4 Foo;
+vec4 arithmetic = blah(); // 算术为 FP32
+Foo = f16vec4(arithmetic); // 缩窄存储
+----
+
+[,glsl]
+----
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+layout(location = 0) in f16vec4 Foo;
+vec4 arithmetic = vec4(Foo); // 取出后扩展为 FP32
+arithmetic += blah();
+----
+
+可在 SPIR-V 中通过能力判断实际情况：仅存储需要 `StorageInputOutput16`；若看到 `Float16` 则意味着启用了 16 位算术能力（需要相应扩展/特性）。忘记启用时，验证层会报错。
+
+== 示例：16 位 InputOutput 存储
+
+该示例渲染大量茶壶模型（17×9=153 个），每个含 9128 个三角形与 4689 个唯一顶点；不使用纹理或后处理，几何带宽为主要贡献。TBDR 上，着色器输入/输出存储是几何带宽的关键来源：
+- 顶点着色器写 `layout(location = N) out T variable;` → 消耗带宽
+- 片段着色器读 `layout(location = N) in T variable;` → 消耗带宽
+
+示例显示：将顶点输出与片段输入的类型改为 fp16，可显著降低设备的全局带宽。未优化场景下（设备实测示意）：约 1.67 GB/s 写与 1.16 GB/s 读；根据可见唯一顶点数与每顶点写入字节数（`gl_Position` 16B + 输出 36B）预估写带宽约 1.11 GB/s，占实测写带宽的约 2/3。将接口改为 fp16 理论上可每顶点节省 18B，按 ~21.5M 顶点/s 估算约可节省 387 MB/s 写带宽，与观察结果基本吻合；读取带宽也相应下降。
+
+== 替代实现：`mediump`
+
+标记顶点输出为 `mediump` 通常也能获得与显式 FP16 类似的带宽节省，但是否真实采用 FP16 取决于驱动实现。如下代码在 Vulkan 1.0 核心实现上可运行，但可能不会得到“真实 FP16”输出：
+
+[,glsl]
+----
+// Vertex
+layout(location = 0) out mediump vec3 o_normal;
+// Fragment
+layout(location = 0) in mediump vec3 in_normal;
+----
+
+== 精度考量
+
+FP16 精度有限，不一定能用于所有顶点输出：
+- 适合：法线/切线/副切线、顶点颜色、以 0 为中心且无需高精度的辅助数据；
+- 可能适合：局部世界坐标（如 `delta_pos = f16vec3(world_position - camera_position)` 可显著改善精度，且越接近相机精度越好；在移动屏幕上误差可能不可感知）、较小纹理分辨率且受限 UV；
+- 基本不适合：全局世界坐标、UI 纹理坐标。
+
+== 最佳实践
+
+- 建议：
+  - 尽可能在满足质量的前提下使用 FP16 顶点输出；
+  - 若无法依赖 `VK_KHR_16bit_storage` 的可用性，至少使用 `mediump` 作为替代；
+- 避免：
+  - 忽视 FP16 顶点输出的带宽收益（即便 60FPS 已达成，也能延长续航）；
+- 影响：
+  - 在 TBDR 上不使用 FP16 顶点输出会浪费带宽、增加功耗；
+- 调试：
+  - 使用 Streamline 等分析器观察外部读/写带宽以评估精度变更的影响。

@@ -1,0 +1,109 @@
+////
+- Copyright (c) 2025 Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 片段密度图（Fragment Density Map）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/fragment_density_map[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+本示例演示 `VK_EXT_fragment_density_map` 扩展。该扩展允许对渲染目标的不同区域以不同频率着色：将一次片段调用广播到多个 texel，再将结果合成呈现。控制通过渲染通道中的专用附件完成，用于定义目标图像各区域的“近似着色密度”。
+
+=== 可能的应用
+
+在感知上不重要的图像区域降低着色频率，可回收性能。常见用例是 VR（虚拟现实）中的“注视点渲染（Foveated Rendering）”：结合眼动追踪，对注视区域以全分辨率渲染，对周边以较低分辨率渲染；若延迟足够低，可在不牺牲感知质量的前提下显著减少片段调用。
+
+注意：VR 不是必要条件，但“注视点渲染”是该扩展的主要应用场景。
+
+== 启用片段密度图
+
+=== 启用扩展
+
+需要 `VK_EXT_fragment_density_map`，其依赖 `VK_KHR_create_renderpass2` 与 `VK_KHR_get_physical_device_properties2`。虽然存在 `VK_EXT_fragment_density_map2` 可降低主机到设备延迟，但本示例未使用。
+
+开发者也可参考 xref:samples/extensions/fragment_shading_rate/README.adoc[片段着色率]（`VK_KHR_fragment_shading_rate`）。后者提供更精细的控制：可按绘制调用、按图元或类似“按帧缓冲区域”的方式指定着色率。
+
+=== 特性描述
+
+[,C++]
+----
+VkPhysicalDeviceFragmentDensityMapFeaturesEXT fdm_features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT };
+fdm_features.fragmentDensityMap                    = VK_TRUE;
+fdm_features.fragmentDensityMapDynamic             = VK_TRUE;
+fdm_features.fragmentDensityMapNonSubsampledImages = VK_FALSE;
+----
+
+通过 `vkGetPhysicalDeviceFeatures2`（或 `vkGetPhysicalDeviceFeatures2KHR`）启用可选特性：
+- 必启用 `fragmentDensityMap`；
+- `fragmentDensityMapDynamic` 可降低“记录命令缓冲→执行”间的延迟（设备不一定支持；不支持时可考虑 `fragment_density_map2`）；
+- `fragmentDensityMapNonSubsampledImages`（不一定支持）允许渲染通道使用“非子采样附件”，有机会直接渲染至交换链；
+
+=== 密度图图像
+
+- 格式需支持 `VK_FORMAT_FEATURE_FRAGMENT_DENSITY_MAP_BIT_EXT`（例如 `VK_FORMAT_R8G8_UNORM`）；
+- 像素值范围 `(0.0, 1.0]`，`1.0` 表示对应轴满密度；具体片段大小由实现定义；
+- 就绪时需处于 `VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT`；
+- 创建时需带 `VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT`；
+
+密度图尺寸需为渲染目标尺寸的因子。通过 `VkPhysicalDeviceFragmentDensityMapPropertiesEXT` 查询支持的因子（`minFragmentDensityTexelSize`/`maxFragmentDensityTexelSize`）。简化做法：用渲染目标尺寸除以 `maxFragmentDensityTexelSize`（向上取整）作为密度图尺寸。
+
+若启用 `fragmentDensityMapDynamic`，创建图像视图时需使用 `VK_IMAGE_VIEW_CREATE_FRAGMENT_DENSITY_MAP_DYNAMIC_BIT_EXT`。
+
+注意：未启用 `fragmentDensityMapNonSubsampledImages` 时，受影响的渲染通道内的所有图像需以 `VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT` 创建。
+
+=== 读取时机
+
+- `fragmentDensityMapDynamic = false`：密度图需在“记录命令缓冲”时就绪，并在 `vkCmdBeginRenderPass(...)` 后保持不变；实际使用发生在提交后，可能产生可见延迟；
+- `fragmentDensityMapDynamic = true`：在 `VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT` 期间读取，消除“记录前生成”要求，延迟最低（需驱动支持）；
+- `VK_EXT_fragment_density_map2`：在未支持 `fragmentDensityMapDynamic` 的设备上，通过允许在 `vkCmdBeginRenderPass(...)` 到 `vkEndCommandBuffer(...)` 之间更新密度图来降低延迟；
+
+=== 渲染通道设置
+
+在 `VkRenderPassCreateInfo` 的 pNext 链中添加 `VkRenderPassFragmentDensityMapCreateInfoEXT` 指定附件与布局。无论子通道数量，建议添加从 `VK_SUBPASS_EXTERNAL` 到 `VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT` 的依赖以确保就绪（若静态密度图且在启动时创建，可省略）。
+
+受限于子采样，通常不可直接渲染至交换链，应在中间阶段采样子采样颜色并写入交换链（该阶段同时合成 UI，建议全分辨率）。启用 `fragmentDensityMapNonSubsampledImages` 时可直接渲染，但若仍需后续合成，仍建议使用中间阶段。
+
+示例流程：
+1. 启动时生成密度图并每帧复用；若启用“每帧更新”，在主命令缓冲开头增加生成密度图的 pass；
+2. 主渲染正向渲染场景，使用密度图作为附件；
+3. 终端合成 pass 采样主 pass 输出并渲染 UI（全分辨率）。
+
+示例提供选项：启用/禁用 FDM、每帧更新（dynamic）、用 Compute/Fragment 生成、显示密度图、调试 `gl_FragSizeEXT`、显示统计信息等；并提供以 `gl_FragSizeEXT` 与 `GL_EXT_fragment_invocation_density` 为基础的可视化着色器。
+
+=== 采样器
+
+用于采样“受 FDM 影响的图像”的采样器需具备特定配置：
+
+[,C++]
+----
+VkSamplerCreateInfo sampler_create_info{ ... };
+sampler_create_info.flags      = VK_SAMPLER_CREATE_SUBSAMPLED_BIT_EXT;
+sampler_create_info.minFilter  = VK_FILTER_NEAREST;
+sampler_create_info.magFilter  = VK_FILTER_NEAREST;
+sampler_create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+sampler_create_info.addressModeU = sampler_create_info.addressModeV = sampler_create_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+----
+
+关键字段为 `.flags/.minFilter/.magFilter/.mipmapMode`，需与要求完全一致。
+
+== 结论
+
+`VK_EXT_fragment_density_map` 与 VR 和 `VK_KHR_multiview` 配合效果尤佳，可用于降低外围区域着色工作量并保持感知质量。开发者也可考虑 `VK_KHR_fragment_shading_rate`，通常具备更广泛的设备支持、更简单的设置与更灵活的控制能力。

@@ -1,0 +1,73 @@
+////
+- Copyright (c) 2023, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 几何着色器到网格着色器（Geometry shader to mesh shader）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/gshader_to_mshader[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/visualization_of_normals.png[Sample]
+
+== 概览
+
+本示例演示如何使用网格着色器（mesh shader）达到几何着色器（geometry shader）类似的效果。示例包含几何着色器与网格着色器两条管线，用于在茶壶模型上可视化法线。
+
+== Meshlets
+
+要在网格着色器中访问模型顶点，需要将其存储在 SSBO（Shader Storage Buffer Object）中；索引需划分为 meshlet 并同样存储在 SSBO 中，使每个工作项处理一个 meshlet。meshlet 通过切分源几何体得到。示例中的 meshlet 结构如下：
+
+[,C++]
+----
+struct Meshlet
+{
+    uint32_t vertices[64];
+    uint32_t indices[126];
+    uint32_t vertex_count;
+    uint32_t index_count;
+};
+----
+
+通过线性扫描模型索引，按“最多 126 个索引或 64 个唯一顶点索引（以先到为准）”生成 meshlet（见 `prepare_meshlets()`）。
+
+示例扩展了 `load_model()`：增加了一个默认 false 的 `storage_buffer` 参数。当其为 true 时，将顶点位置与法线按 `AlignedVertex` 结构（std430 对齐）存入 SSBO，并按 `Meshlet` 结构将索引划分为 meshlet 并写入 SSBO。
+
+== 启用扩展
+
+设备扩展：`VK_EXT_MESH_SHADER_EXTENSION_NAME`。其依赖 `VK_KHR_SPIRV_1_4_EXTENSION_NAME`，而后者又依赖 Vulkan 1.1 与 `VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME`；SPIR-V 目标需设为 1.4。
+
+[,C++]
+----
+set_api_version(VK_API_VERSION_1_1);
+add_device_extension(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+add_device_extension(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
+add_device_extension(VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
+vkb::GLSLCompiler::set_target_environment(glslang::EShTargetSpv, glslang::EShTargetSpv_1_4);
+----
+
+并在 `vkGetPhysicalDeviceFeatures2` 的 pNext 链中包含 `VkPhysicalDeviceMeshShaderFeaturesEXT`，以启用：
+
+[,C++]
+----
+auto &requested_vertex_input_features      = gpu.request_extension_features<VkPhysicalDeviceMeshShaderFeaturesEXT>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT);
+requested_vertex_input_features.meshShader = VK_TRUE;
+----
+
+== 优缺点
+
+几何着色器通常不建议用于实时渲染，因其带来高带宽与性能下降；但其属于传统管线，处理源几何体时不需要 meshlet 预处理。网格着色器性能更好、灵活性更高，但需要对源几何体进行预处理（meshlet）。

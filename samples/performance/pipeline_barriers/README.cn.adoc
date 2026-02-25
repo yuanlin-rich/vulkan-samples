@@ -1,0 +1,64 @@
+////
+- Copyright (c) 2019-2024, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 高效使用管线屏障（Using pipeline barriers efficiently）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/pipeline_barriers[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+Vulkan 让应用对资源的内存访问拥有高度控制。管线屏障是跨渲染通道同步内存访问的便利机制。存在内存依赖处必须使用屏障；应用不可假设渲染通道顺序执行。但过多或过严的屏障会损害性能。本文聚焦“管线阶段”的选择，讲解如何高效设定屏障。
+
+== 平铺架构背景
+
+即刻模式（桌面）通常按“图元→片段”序列逐个执行片段着色器，导致每片段频繁读改写工作集（混合、深度/模板），高分辨率下带宽与能耗极高。平铺架构改用“两阶段”：先处理几何，再进行片段工作，将屏幕拆为 16×16 tiles，将工作集保存在紧耦合高速 RAM 中；Mali 具有“顶点/计算槽”和“片段槽”，可并行处理不同帧/通道的顶点与片段工作。
+
+== 选择管线阶段
+
+命令在多阶段流水线上执行。若共享资源先写后读，需要加入屏障（`VkMemoryBarrier / VkBufferMemoryBarrier / VkImageMemoryBarrier`）。屏障在命令缓冲中定义了“之前/之后”命令的执行依赖。
+
+例如延迟渲染两通道：第一通道写 G-buffer，第二通道采样。需要屏障避免 hazard。保守做法用 `ALL_GRAPHICS/ALL_COMMANDS` 等“全阶段屏障”，会强制流水线在两通道间刷新、造成性能损失。若第二通道仅在片段阶段采样，则可用更松的 `COLOR_ATTACHMENT_OUTPUT_BIT → FRAGMENT_SHADER_BIT` 仍保证正确，这样 GPU 可将第一通道的片段着色与第二通道的顶点着色并行。
+
+== 示例
+
+示例在两通道的延迟渲染中切换屏障：
+- 极保守：`BOTTOM_OF_PIPE → TOP_OF_PIPE`，顶点与片段工作完全串行；
+- 小幅放松：`COLOR_ATTACHMENT_OUTPUT → VERTEX_SHADER`，常见“默认”屏障，但若图像仅在片段阶段需要则仍有优化空间；
+- 更高效：`COLOR_ATTACHMENT_OUTPUT → FRAGMENT_SHADER`，片段持续进行、顶点并行；管线“气泡”消失，帧时提升约 13%。
+
+== 最佳实践
+
+- 建议：
+  - 将 `srcStageMask` 设置为尽可能靠前的阶段；
+  - 将 `dstStageMask` 设置为尽可能靠后的阶段；
+  - 明确依赖是“向前”（顶点/计算→片段）还是“向后”（片段→顶点/计算），尽量减少向后依赖，除非能在生成与消费之间加入足够延迟以隐藏气泡；
+  - 跨渲染通道同步时常用 `src=ALL_GRAPHICS`、`dst=FRAGMENT_SHADER`；
+  - 尽量减少 TRANSFER 拷贝，优先零拷贝算法，并评估其对流水线的影响；
+  - 仅在必要时使用队列内屏障，并在屏障之间尽可能多放工作；
+- 避免：
+  - 假设渲染通道天然已同步；
+  - 无谓地让硬件缺乏工作，尝试让顶点/计算与片段并行；
+  - 使用以下组合（常导致流水线完全排空）：`BOTTOM→TOP`、`ALL_GRAPHICS→ALL_GRAPHICS`、`ALL_COMMANDS→ALL_COMMANDS`；
+  - 刚发/即候 `VkEvent`（改用 `vkCmdPipelineBarrier`）；
+  - 在单队列内用 `VkSemaphore` 管理依赖；
+- 影响：
+  - 屏障错误可能让 GPU 缺工（过度同步）或引发渲染错误（同步不足）；平铺架构与桌面架构差异使屏障调优尤为关键；
+- 调试：
+  - 检查跨通道缺失的同步；在 Mali 上用 Streamline 可视化两个槽位的 CPU/GPU 活动。

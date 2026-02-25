@@ -1,0 +1,53 @@
+////
+- Copyright (c) 2019-2023, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= CPU 与 GPU 的同步（Synchronizing the CPU and GPU）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/wait_idle[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+本示例比较两种 CPU↔GPU 同步方式：WaitIdle 与 Fences，并演示避免阻塞的更优选择。
+
+== WaitIdle 或 Fences
+
+最简单的同步是 `vkQueueWaitIdle` 或 `vkDeviceWaitIdle`，它们等待队列/设备完成所有提交的工作。在单队列场景下两者等价。此法可靠但粒度过粗，会导致 GPU 流水线“放空”，无法跨帧并行顶点与片段工作，增加帧时、降低效率。
+
+替代方案是使用 `VkFence`：GPU 在完成某帧工作后通知 CPU，允许安全复用该帧资源。这样 CPU 可继续提交后续帧，无需等待 GPU，避免流水线被抽干。
+
+== 示例
+
+示例提供单选切换：
+- 使用 WaitIdle：每帧开始前调用 `vkDeviceWaitIdle`，强制 GPU 清空所有工作，直至下一帧命令录制完并提交前 GPU 处于空闲，帧时上升；
+- 使用 Fences：为每帧分配一个 Fence，渲染前 `vkWaitForFences` 等待“下一帧的 Fence”，CPU 可在 GPU 执行上一帧期间继续提交后续帧；
+
+在 Mali G76 上：WaitIdle 平均帧时约 72ms；切换到 Fences 后降至 ~56ms（约 -22%）。Streamline 也显示 WaitIdle 使 GPU 工作被抽空、空闲增多。
+
+== 最佳实践
+
+- 建议：
+  - 用 Fence 异步回读/同步 CPU，不要阻塞等待导致流水线抽干；
+- 避免：
+  - 不必要地在 CPU/GPU 上等待 GPU 数据；
+  - 除非必要，不要使用 `vkQueueWaitIdle()/vkDeviceWaitIdle()` 这种粒度很粗的同步；
+- 影响：
+  - 影响大小取决于工作队列的大小与顺序；
+- 调试：
+  - 使用 Arm Mobile Studio 可视化 CPU/GPU 两个队列的活动，快速识别队列本地/全局的调度“气泡”。

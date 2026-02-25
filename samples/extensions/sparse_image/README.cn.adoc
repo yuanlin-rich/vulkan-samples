@@ -1,0 +1,112 @@
+////
+- Copyright (c) 2023, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 稀疏图像（Sparse image）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/sparse_image[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/sparse_image_screenshot.png[Sample]
+
+== 概览
+
+https://registry.khronos.org/vulkan/site/spec/latest/chapters/sparsemem.html[稀疏资源（Sparse Resources）] 相比标准资源在内存绑定方面更为灵活。
+
+本示例展示的标准资源与稀疏资源之间的关键差异包括：
+
+* 稀疏资源可非连续地绑定到一个或多个 VkDeviceMemory 分配；
+* 稀疏资源在生命周期内可重新绑定到不同的内存分配；
+
+示例通过仅为高分辨率纹理的部分区域在设备内存上分配空间来演示稀疏图像特性：按需动态加载所需内存区域、为外围生成 mip 级别、移除未使用的内存，并最终在运行时绑定图像。
+
+== 启用特性
+
+需要启用 3 个设备特性：
+
+* sparseBinding；
+* sparseResidencyImage2D；
+* shaderResourceResidency；
+
+前两者是使用稀疏图像资源的关键。最后一个 `shaderResourceResidency` 使片段着色器能够检测图像的哪些部分已分配内存。
+
+[source,c++]
+----
+void SparseImage::request_gpu_features(vkb::PhysicalDevice &gpu)
+{
+	if (gpu.get_features().sparseBinding && gpu.get_features().sparseResidencyImage2D && gpu.get_features().shaderResourceResidency)
+	{
+		gpu.get_mutable_requested_features().sparseBinding           = VK_TRUE;
+		gpu.get_mutable_requested_features().sparseResidencyImage2D  = VK_TRUE;
+		gpu.get_mutable_requested_features().shaderResourceResidency = VK_TRUE;
+	}
+----
+
+== 启用扩展
+
+本示例使用了一个扩展：
+
+* GL_ARB_sparse_texture2；
+
+该扩展仅在片段着色器中使用，但需要先启用 `shaderResourceResidency` 特性。该扩展允许片段检查对应片元的内存是否实际已分配。因此可以在片段着色器侧持续检查驻留情况，并尽可能使用最精细的可用数据。
+
+[source,glsl]
+----
+#extension GL_ARB_sparse_texture2 : enable
+----
+
+[source,glsl]
+----
+for(; (lod <= maxLOD) && !sparseTexelsResidentARB(residencyCode); lod += 1)
+{
+	residencyCode = sparseTextureLodARB(texSampler, fragTexCoord, lod, color);
+}
+----
+
+== 必要 LOD 如何计算？
+
+完整方法在源码中有详细注释。总体思路是：计算“屏幕上的 x 或 y 方向移动，与纹理上的 u 或 v 方向移动”的比值。
+
+直观理解：当屏幕上沿 x/y 方向每像素移动一步，若对应在纹理上产生较大的步进，则说明该区域距离观察者较远，应使用更低细节的 mip 级别。
+
+计算公式为：
+
+LOD = log2 (max(dT / dx, dT / dy))；其中：
+
+* dT 为纹理空间的步进（texel 数），
+* dx、dy 为屏幕空间的步进（像素数）。
+
+== 图形界面（UI）
+
+用户可通过 GUI 调整应用行为，选项包括：
+
+* 颜色高亮：启用后，用不同颜色高亮显示不同 LOD 的使用区域；
+* 内存碎片整理：启用后，将低占用扇区的页迁移到高占用（但可用）的扇区，以尽量减少整体分配数量；
+* 更新优先策略：启用后，应用优先处理“最新请求”，并丢弃“过时请求”的剩余项（动态移动相机时可观察到效果）；
+* 每帧块数（Blocks per cycle）：单帧最多可更新的块数量。块总数 = 纵向块数 × 横向块数；
+* 纵向块数：纹理被划分的列数；
+* 横向块数：纹理被划分的行数；
+
+此外，GUI 还展示内存使用数据（以页为单位）：描述如果整张图像全部分配所需的“虚拟需求”，以及设备上的当前实际分配。
+
+== 小结
+
+稀疏图像的典型用途是应对“设备内存占用过大”的场景。常驻低细节 mip 级别，并在相机发生变化时按需加载所需区域，是处理超大地形纹理的常见方式。其代价在于：
+
+* 频繁在 CPU→设备 间传输所需内存块可能引发瓶颈；
+* 由于由应用决定分配哪些内存，需要自行计算“需要的细节级别”等逻辑，带来额外的 CPU 开销。

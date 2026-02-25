@@ -1,0 +1,30 @@
+////
+- Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 移动端 NeRF（Ray Query 版本）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/general/mobile_nerf_rayquery[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+NeRF 是一种 3D 场景表示方法，可通过不同视角拍摄的多张 2D 图片合成 3D 场景的图像。为适配移动端硬件，已有多种 NeRF 变体（如 MobileNeRF）利用传统图形硬件高效渲染。
+
+本版本在 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/general/mobile_nerf[MobileNeRF 实现] 的基础上，使用 Vulkan 的 Ray Query 特性以利用移动 GPU 的硬件光线追踪能力。在多数场景下显著提升性能。同时，Vulkan API 在渲染管线与着色器改造/优化方面具有良好的灵活性，可在保证性能的同时增添更多功能。
+
+== 说明
+原始源码同样为 Apache-2.0 许可。示例中使用的着色器文件在适用处标注了改动说明。

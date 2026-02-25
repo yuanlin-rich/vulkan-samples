@@ -1,0 +1,138 @@
+////
+- Copyright (c) 2024-2025, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 主机侧图像拷贝（Host image copy）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/host_image_copy[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+:pp: {plus}{plus}
+
+== 概览
+
+在 Vulkan 中，常见场景是将图像数据拷贝到 GPU 以供着色器采样（例如纹理）。通常数据来自磁盘文件（如 KTX），需要从主机传到设备。
+
+取决于内存架构，传统做法是先将图像数据上传到“主机可见缓冲”，再复制到“设备本地缓冲”，以便作为着色器可用图像；并需要多次图像布局转换（屏障），这被称为“分段（staging）”。
+
+在诸如从磁盘流式加载图像的场景中，分段会带来额外内存/拷贝开销，可能导致内存换页或卡顿。
+
+`VK_EXT_host_image_copy` 提供直接在主机与设备之间移动图像数据的方法，避免上述分段流程，并简化布局转换。
+
+注意：分段通常是“CPU 拷贝到 GPU 可见缓冲 + GPU 将数据转换为最优格式”；主机侧图像拷贝由 CPU 直接完成拷贝与转换。在很多情况下，即使不借助 GPU，主机拷贝仍可能更快。
+
+== 启用扩展
+
+设备层需启用 `VK_EXT_host_image_copy`（依据目标 Vulkan 版本可能需额外扩展，详见规范的依赖说明）。此外需启用扩展特性结构中的 `hostImageCopy`：
+
+[,cpp]
+----
+VkPhysicalDeviceHostImageCopyFeaturesEXT host_image_copy_features{};
+host_image_copy_features.sType        = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT;
+host_image_copy_features.hostImageCopy = VK_TRUE;
+// 通过 pNext 链入设备创建
+----
+
+== 检查图像格式支持
+
+尽管“可采样格式”必须支持主机图像拷贝，但其他格式未必支持；应检查格式是否包含 `VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT`：
+
+[,cpp]
+----
+VkFormatProperties3 format_properties_3{ VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3_KHR };
+VkFormatProperties2 format_properties_2{ VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2 };
+format_properties_2.pNext = &format_properties_3;
+vkGetPhysicalDeviceFormatProperties2(physical_device, image_format, &format_properties_2);
+if ((format_properties_3.optimalTilingFeatures & VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT) == 0) {
+    // 选择其他格式或采用其他上传方式
+}
+----
+
+== 设置目标图像
+
+目标为设备本地、最优平铺（OPTIMAL）的图像：
+
+[,cpp]
+----
+VkImageCreateInfo imageCreateInfo = vkb::initializers::image_create_info();
+imageCreateInfo.imageType     = VK_IMAGE_TYPE_2D;
+imageCreateInfo.format        = image_format;
+imageCreateInfo.mipLevels     = 1;
+imageCreateInfo.arrayLayers   = 1;
+imageCreateInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+imageCreateInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+imageCreateInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+imageCreateInfo.extent        = {texture.width, texture.height, 1};
+imageCreateInfo.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT;
+VK_CHECK(vkCreateImage(get_device().get_handle(), &imageCreateInfo, nullptr, &texture.image));
+----
+
+与分段的差别在用法位：无需 `VK_IMAGE_USAGE_TRANSFER_DST_BIT`，改为 `VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT` 以告知将使用主机拷贝。
+
+== 简化的布局转换
+
+分段需要先将图像转换为“传输目标”，拷贝后再转为“着色器读取”，两次屏障且需提交命令缓冲。
+
+`VK_EXT_host_image_copy` 简化为一次“最终用途布局”转换，且可在主机侧通过 `vkTransitionImageLayoutEXT` 完成，无需提交命令缓冲：
+
+[,cpp]
+----
+VkHostImageLayoutTransitionInfoEXT info{ VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT };
+info.image            = texture.image;
+info.oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
+info.newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+info.subresourceRange = subresource_range;
+----
+
+== 从主机拷贝图像数据
+
+若格式支持主机拷贝，可将主机内存中的图像数据直接拷入设备图像：
+
+[,cpp]
+----
+VkMemoryToImageCopyEXT memory_to_image_copy{ VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT };
+memory_to_image_copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+memory_to_image_copy.imageExtent      = { image_width, image_height, 1 };
+memory_to_image_copy.pHostPointer     = host_memory_address;
+
+VkCopyMemoryToImageInfoEXT copy_memory_info{ VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO_EXT };
+copy_memory_info.dstImage       = texture.image;
+copy_memory_info.dstImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+copy_memory_info.regionCount    = 1;
+copy_memory_info.pRegions       = &memory_to_image_copy;
+
+vkCopyMemoryToImageEXT(device, &copy_memory_info);
+----
+
+`pHostPointer` 指向主机内存中的源数据。拷贝多个 mip 级别时，可准备多条 `VkMemoryToImageCopyEXT` 并按需偏移 `pHostPointer` 指向对应起始地址。这样无论数据是否紧致存放或分散于不同地址，都能轻松拷贝。
+
+== 示例
+
+本示例基于“纹理加载”API 示例，将上传图像的分段流程替换为主机侧图像拷贝。对比两者可直观感受主机拷贝在流程与代码上的简化。
+
+== 结论
+
+除“主机→设备”外，该扩展也支持“设备→主机”的图像拷贝与“图像→图像”的主机侧拷贝，均可简化图像传输、降低内存占用并改善性能。
+
+== 参考
+
+- https://www.khronos.org/blog/copying-images-on-the-host-in-vulkan[在 Vulkan 中进行主机侧图像拷贝]
+- https://docs.vulkan.org/features/latest/features/proposals/VK_EXT_host_image_copy.html[扩展提案]
+- https://registry.khronos.org/vulkan/specs/latest/man/html/VK_EXT_host_image_copy.html[规范]
+- https://vulkan.gpuinfo.org/displayextensiondetail?extension=VK_EXT_host_image_copy[设备支持情况]

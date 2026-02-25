@@ -1,0 +1,140 @@
+////
+- Copyright (c) 2024-2025, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 动态渲染本地读取（Dynamic Rendering local read）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/dynamic_rendering_local_read[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/sample.png[Sample]
+
+== 概述
+
+本示例演示如何将 `VK_KHR_dynamic_rendering_local_read` 扩展与 `VK_KHR_dynamic_rendering` 扩展配合使用。该组合可以替代核心的渲染通道（渲染通道（render pass））与子通道（子通道（subpass）），使动态渲染能够通过输入附件（input attachments）进行像素本地读取（pixel local reads）。
+
+== 在动态渲染与渲染通道（渲染通道（render pass））间切换
+
+为了便于比较“动态渲染 + 本地读取”和“渲染通道（渲染通道（render pass））+ 子通道（子通道（subpass））”两种方法，本示例同时包含这两条渲染路径的代码。
+
+可以通过 `dynamic_rendering_local_read.h` 中的一个宏来切换两种技术：
+
+[,cpp]
+----
+#define USE_DYNAMIC_RENDERING
+----
+
+该宏默认启用，使示例使用“动态渲染 + 本地读取”。如果想改为“渲染通道（渲染通道（render pass））+ 子通道（子通道（subpass））”，请注释掉该宏并重新编译示例。
+
+== 对比
+
+关于 渲染通道（render pass） 与动态渲染差异的入门说明，请参阅 xref:/samples/extensions/dynamic_rendering/README.adoc[动态渲染示例] 的 README。
+
+下面是该示例中的对比表，并在此基础上加上 `VK_KHR_dynamic_rendering_local_read` 新增特性（以粗体标出）：
+
+|===
+| Vulkan 1.0 | 动态渲染（Dynamic Rendering）
+
+| 渲染以 `vkCmdBeginRenderPass` 开始
+| 渲染以 `vkCmdBeginRenderingKHR` 开始
+
+| 渲染结构体为 `VkRenderPassBeginInfo`
+| 渲染结构体为 `VkRenderingInfoKHR`
+
+| 附件通过 `VkFramebuffer` 引用
+| 附件通过 `VkRenderingAttachmentInfoKHR` 引用
+
+| `VkFramebuffer` 对象在堆上分配且不透明
+| `VkRenderingAttachmentInfoKHR` 对象通常在栈上分配
+
+| 图形管线创建需要引用 `VkRenderPass`
+| 图形管线创建需要引用 `VkPipelineRenderingCreateInfoKHR`
+
+| *通过 `vkCmdNextSubpass` 前进到下一个 子通道（subpass）*
+| *通过 `VkImageMemoryBarrier` 将图像布局切换为 `VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR`*
+
+| *着色器中的本地读取使用 `子通道（subpass）Load`*
+| *着色器中的本地读取使用 `子通道（subpass）Load`*
+|===
+
+== 示例说明
+
+在使用 子通道（subpass） 的情况下，可以在同一个 渲染通道（render pass） 内进行像素本地读取。本地读取意味着你不能像使用纹理和采样器那样自由采样，而是只能在同一像素位置读取先前 子通道（subpass） 的像素值。这与（尤其是）基于图块的 GPU 架构的工作方式有关。在这类架构上，对于不需要任意采样的工作负载，使用 子通道（subpass） 和通过输入附件进行像素本地读取可以提升性能。一个典型例子是带有合成阶段（composition pass）的延迟渲染器：首先，用多个附件填充不同信息（如反照率 albedo、法线、世界空间位置），随后在合成阶段将这些附件组合成一张图像。该合成步骤在当前 pass 正在处理的同一像素位置读取这些附件，因此我们可以将它们作为输入附件，仅进行像素本地读取，而非常规采样。
+
+该示例的渲染设置如下：
+
+image::./images/deferred_setup.png[Deferred setup describing 子通道（subpass）es]
+
+一个对 渲染通道（render pass） 的重要批评点在于其（尤其是）设置过程非常繁琐。正确配置 渲染通道（render pass） 与 子通道（subpass）（包括依赖关系）可能较为棘手；同时，渲染通道（render pass） 也难以融入动态变化的场景，因此不太适合诸如游戏引擎等复杂的 Vulkan 项目。使用动态渲染后，设置工作明显减少，并且主要转移到命令缓冲的构建阶段。如果查看本示例，你可以很容易地通过被 `dynamic_rendering_local_read` 这个 C++ 宏关闭的代码片段的多少来观察需要的代码量。更多内容可在 xref:/samples/extensions/dynamic_rendering/README.adoc[动态渲染示例] 的 README 中找到。本文仅关注绘制阶段。
+
+== 用本地读取替代 子通道（subpass）
+
+=== 输入附件（Input attachments）
+
+与 子通道（subpass） 中的本地读取类似，动态渲染的本地读取同样使用输入附件。这使得将现有代码迁移到该扩展变得容易。除非你在做诸如“输入附件重排”之类的高级操作，给动态渲染加入像素本地读取所需的改动很少，且仅影响应用侧。着色器接口无需变化，因此用于“渲染通道（渲染通道（render pass））+ 子通道（子通道（subpass））”的着色器可以无需修改直接使用。即便采用“动态渲染 + 本地读取”，你依然使用 `子通道（subpass）Input` 与 `子通道（subpass）Load`。
+
+=== 自依赖（Self-Dependencies）
+
+启用 `dynamicRenderingLocalReads` 功能后，只要管线屏障（pipeline barrier）包含 `VK_DEPENDENCY_BY_REGION_BIT`，就可以在动态渲染中使用该屏障。这样的屏障会使屏障之前对附件的写入，在之后可作为输入附件被读取。该扩展还引入了新的图像布局 `VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR`，可用于存储图像（storage images）与附件，使对此的写入能通过输入附件读取到。
+
+=== 使用 子通道（subpass） 的 渲染通道（render pass）
+
+. 使用 `vkCmdBeginRenderPass` 开启新的 渲染通道（render pass）（同时也开始第一个 子通道（subpass））
+. 填充 G-Buffer 附件
+. 使用 `vkCmdNextSubpass` 开始第二个 子通道（subpass）
+. 使用输入附件合成 G-Buffer（并用全屏四边形绘制到屏幕）
+. 使用前向通道（forward pass）绘制透明几何体，并从某个附件读取深度
+. 使用 `vkCmdEndRenderPass` 结束 渲染通道（render pass）
+
+=== 动态渲染 + 本地读取
+
+. 使用 `vkCmdBeginRenderingKHR` 开始动态渲染
+. 填充 G-Buffer 附件
+. 插入带有“按区域（by region）”位的内存屏障，使附件写入对后续的输入附件读取可见（用于下一次绘制调用）
+. 使用输入附件合成 G-Buffer（并用全屏四边形绘制到屏幕）
+. 使用前向通道绘制透明几何体，并从某个附件读取深度
+. 使用 `vkCmdEndRenderingKHR` 结束动态渲染
+
+== 通过示例理解位置映射（location mapping）
+
+为帮助理解位置重映射的概念，以下是一个简单的片段着色器：
+
+```glsl
+layout(location=0) out vec4 A;
+layout(location=1) out vec4 B;
+layout(location=2) out vec4 C;
+```
+
+若将 `VkRenderingAttachmentLocationInfo::pColorAttachment` 设置为 `[1, 2, 0]`：
+
+- 对 `A` 的写入会写到 `VkRenderingInfo::pColorAttachments[2]`
+- 对 `B` 的写入会写到 `VkRenderingInfo::pColorAttachments[0]`
+- 对 `C` 的写入会写到 `VkRenderingInfo::pColorAttachments[1]`
+
+如果只将 `VkRenderingAttachmentLocationInfo::pColorAttachment` 设置为 `[1, 2]`：
+
+- 对 `A` 的任何写入都会被丢弃。
+
+== 结论
+
+随着 `VK_KHR_dynamic_rendering_local_read` 的加入，现在终于可以完整替代 渲染通道（render pass），包括具有多个 子通道（subpass） 的情况。这样一来，动态渲染在所有实现（包括基于图块的架构）上都可成为 渲染通道（render pass） 的完全替代方案。
+
+== 其他信息
+
+* https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_dynamic_rendering_local_read.html[扩展提案]
+* https://www.khronos.org/blog/streamlining-子通道（subpass）es[扩展博客文章]

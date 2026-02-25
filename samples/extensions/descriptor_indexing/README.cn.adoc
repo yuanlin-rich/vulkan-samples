@@ -1,0 +1,447 @@
+////
+- Copyright (c) 2021-2024, Arm Limited and Contributors
+
+- SPDX-License-Identifier: Apache-2.0
+
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+
+-     http://www.apache.org/licenses/LICENSE-2.0
+
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+
+////
+
+= 描述符索引（Descriptor Indexing）
+
+ifdef::site-gen-antora[]
+TIP: 此示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/descriptor_indexing[Khronos Vulkan samples GitHub 仓库]。
+endif::[]
+
+
+== 概述
+
+描述符索引是一项为资源访问方式带来巨大灵活性的扩展。
+该扩展的核心思想是：我们可以把描述符内存视作一个巨大的数组，并在任意时刻通过索引自由访问任意资源。
+洞察在于：如果数组足够大，那么数组索引与指针在效果上就难以区分。
+通过允许在任意时刻自由访问任意资源，我们可以高效实现依赖这种能力的高级算法。
+
+描述符索引也常被称为“bindless（无绑定）”，指的是绑定单独的描述符集与描述符不再是向着色器管线供给资源的主要方式。
+相反，我们可以一次性绑定一个巨大的描述符集，然后对大量描述符进行索引访问。
+“Bindless 算法”通常围绕这种灵活性展开：要么同时自由索引大量描述符，要么随处更新需要的描述符。
+在这种模型中，“绑定”描述符不再值得关注。
+最多只需要把描述符写入/复制到所需位置，此时描述符更像是一个内存块，而非高度结构化的 API 对象。
+
+== 用例
+
+=== Update-After-Bind（绑定后更新），并发流式更新描述符
+
+第一个主要特性是 Update-After-Bind。
+在 Vulkan 中，通常需要先创建 `VkDescriptorSet` 并在调用 `vkCmdBindDescriptorSets` 之前把所有描述符更新到该集合。
+一旦集合被绑定，在 GPU 使用完之前，描述符集不能再次被更新。
+这为驱动在访问描述符时提供了大量灵活性：
+它们可以自由复制描述符并把它们打包到其他位置、提升到硬件寄存器等。
+
+Update-After-Bind 将灵活性转移给应用。
+只要 GPU 实际上没有访问某个描述符，就可以在任意时刻更新它。
+即使描述符集已绑定到命令缓冲，也可以更新描述符，这就启用了“流式（streaming）”用例。
+
+link:../../performance/constant_data[Constant Data 性能示例] 同样演示了 Update-After-Bind 描述符。
+
+==== 并发更新
+
+Update-After-Bind 的另一个“隐藏”特性是，可以从多个线程更新同一个描述符集。
+对于真正的“bindless”，这非常有用，因为不相关的任务可能希望更新流式/无绑定描述符集的不同部分。
+
+==== 描述符标志
+
+要为某个描述符 binding 启用 UPDATE_AFTER_BIND_BIT 特性，需要做一些配置工作。
+
+在 `VkDescriptorSetLayoutCreateInfo` 中，必须通过 `pNext` 传递一个单独的结构来设置 binding 标志。
+
+[,cpp]
+----
+VkDescriptorSetLayoutCreateInfo set_layout_create_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+set_layout_create_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT;
+const VkDescriptorBindingFlagsEXT flags =
+    VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT_EXT |
+    VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT |
+    VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT |
+    VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT_EXT;
+
+VkDescriptorSetLayoutBindingFlagsCreateInfoEXT binding_flags{};
+binding_flags.sType          = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT;
+binding_flags.bindingCount   = 1;
+binding_flags.pBindingFlags  = &flags;
+set_layout_create_info.pNext = &binding_flags;
+
+VK_CHECK(vkCreateDescriptorSetLayout(get_device().get_handle(), &set_layout_create_info, nullptr, &descriptors.set_layout));
+----
+
+`VkDescriptorPool` 也必须以 UPDATE_AFTER_BIND_BIT 创建。
+需要注意：在任意时间点，带 UPDATE_AFTER_BIND_BIT 的可分配描述符数量有一个全局上限。
+最低规范是 50 万（500k），通常已经足够。
+
+更多细节请参阅代码中的注释。
+
+=== 非统一索引（Non-uniform indexing），启用高级算法
+
+Update-After-Bind 为描述符管理增加了灵活性，而非统一索引为着色器带来了更大的灵活性。
+
+==== 访问资源的不同层次
+
+我们访问资源的方式在这些年发生了很多变化。
+主要由硬件因素驱动，不过现代硬件普遍对资源访问非常灵活。
+
+===== 常量索引（Constant indexing）
+
+最早是常量索引。
+
+[,glsl]
+----
+layout(set = 0, binding = 0) uniform sampler2D Tex[4];
+
+texture(Tex[0], ...);
+texture(Tex[2], ...);
+
+// 我们可以轻松地把常量索引的数组展开为独立资源，
+// 因此常量索引不需要复杂的硬件索引支持。
+layout(set = 0, binding = 0) uniform sampler2D Tex0;
+layout(set = 0, binding = 1) uniform sampler2D Tex1;
+layout(set = 0, binding = 2) uniform sampler2D Tex2;
+layout(set = 0, binding = 3) uniform sampler2D Tex3;
+----
+
+===== 动态索引（Dynamic indexing）
+
+在常量索引之后，是动态索引。
+自 Vulkan 1.0 起便已支持。
+动态索引允许使用非常量的表达式对数组进行索引。
+其限制是索引必须“动态一致（dynamically uniform）”，后文会解释……
+
+[,glsl]
+----
+layout(set = 0, binding = 0) uniform sampler2D Tex[4];
+
+texture(Tex[dynamically_uniform_expression], ...);
+----
+
+===== 非统一索引（Non-uniform indexing）
+
+非统一索引完全取消了数组索引的所有限制，但必须告知编译器我们的意图。
+通常驱动与硬件可以假定动态一致性成立，并为该场景优化。
+如果我们在 `GL_EXT_nonuniform_qualifier` 中使用 `nonuniformEXT` 修饰符，便可以让编译器知道这个保证不一定成立，编译器会针对目标硬件以最有效方式处理。
+
+需要进行这种标注的理由在于：如果应用不需要显式使用 `nonuniformEXT`，驱动的编译后端可能被迫采取比必要更保守的策略。
+
+[,glsl]
+----
+// 不定长数组，真香！
+layout(set = 0, binding = 0) uniform sampler2D Tex[];
+texture(Tex[nonuniformEXT(arbitrary_expression)], ...);
+----
+
+==== 非统一索引 vs 纹理图集 vs 纹理数组
+
+在一次绘制调用中访问任意纹理并非新问题，图形程序员多年来一直在老 API 的限制下寻找解决方案。
+与其保留多个纹理，不如在一个纹理资源里打包多个纹理，并从正确的区域进行采样。
+这种技术通常被称为“纹理图集（texture atlas）”。
+纹理数组（例如 sampler2DArray）也是可用于类似目的的特性。
+
+纹理图集的问题：
+
+- Mip 映射难以实现，通常必须借助导数与数学手动计算
+- 各向异性过滤基本不可实现
+- 除 `CLAMP_TO_EDGE` 以外的采样器寻址模式实现起来非常别扭
+- 无法混用不同的纹理格式
+
+纹理数组的问题：
+
+- 所有分辨率必须一致
+- 数组层数受限（最低规范仅 256）
+- 无法混用不同的纹理格式
+
+非统一索引解决了上述问题，因为我们可以自由使用多个采样图像描述符。
+图集与纹理数组仍有其适用场景，
+在很多用例中这些限制并不构成问题。
+
+==== 不仅仅是纹理
+
+非统一索引不仅限于纹理（尽管那是最相关的用例）。
+只要设备支持，任何描述符类型都可使用。
+
+==== 何时使用非统一索引修饰符
+
+“动态一致（dynamically uniform）”是个不太好理解的概念。
+这里需要引入一些术语。
+
+===== 调用组（Invocation group）
+
+调用组是一组协同执行任务的线程（调用）。
+在图形管线中，调用组是由单次绘制命令生成的所有线程。
+这包括多个实例；对于 multi-draw-indirect，调用组限定在单个 `gl_DrawID`。
+在计算管线中，调用组是单个工作组（workgroup），因此很容易判断是否可以不使用 nonuniformEXT。
+
+如果在一个调用组中，所有调用对某表达式的值相同，则该表达式被视为动态一致。
+
+===== 子组（Subgroup）如何参与？
+
+很容易把“动态一致”理解为“只要索引在子组中一致即可！”。
+这在绝大多数（桌面）架构上确实成立，但并非对所有架构都成立。
+
+技术上可能出现“子组一致但非动态一致”的情况。
+考虑工作组大小为 128 线程，子组大小为 32 的场景。
+即便每个子组对索引执行 `subgroupBroadcastFirst()`，各子组的值仍可能不同，因此从技术上仍需要 `nonuniformEXT`。
+如果你明确知道每个工作组只包含一个子组，那么 `subgroupBroadcastFirst()` 就足够了。
+
+最安全的做法是在无法证明动态一致时，直接添加 `nonuniformEXT`。
+如果编译器知道它只关心“子组一致性”，那么它也可以轻松地把 `nonuniformEXT(subgroupBroadcastFirst())` 优化掉。
+
+之所以使用子组的常见理由，是在缺乏真正的非统一索引时（尤其桌面 GPU），的一种老式变通。
+常见模式如下：
+
+[,glsl]
+----
+bool needs_work = true;
+uint index = something_non_uniform();
+do
+{
+    if (subgroupBroadcastFirst(index) == index)
+    {
+        // 索引在子组内一致，这对多数（所有？）桌面 GPU 架构而言已经足够。
+        // 从技术上讲并不完全正确；直接使用 nonuniformEXT() 更好。
+        // 如果我们基于索引加载“统一（uniform）数据”，这种代码仍可能有意义，
+        // 因为它能显著改善内存访问模式，
+        // 但这是另一个话题，且高度依赖 IHV（硬件厂商）……
+        texture(Tex[index], ...);
+        needs_work = false;
+    }
+} while (needs_work);
+----
+
+===== Vulkan GLSL 示例
+
+[,glsl]
+----
+#version 450
+#extension GL_EXT_nonuniform_qualifier : require
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) uniform sampler2D Combined[];
+layout(set = 1, binding = 0) uniform texture2D Tex[];
+layout(set = 2, binding = 0) uniform sampler Samp[];
+layout(set = 3, binding = 0) uniform U { vec4 v; } UBO[];
+layout(set = 4, binding = 0) buffer S { vec4 v; } SSBO[];
+layout(set = 5, binding = 0, r32ui) uniform uimage2D Img[];
+
+void main()
+{
+	uint index = gl_GlobalInvocationID.x;
+	vec2 uv = vec2(gl_GlobalInvocationID.yz) / 1024.0;
+
+	vec4 a = textureLod(Combined[nonuniformEXT(index)], uv, 0.0);
+	vec4 b = textureLod(nonuniformEXT(sampler2D(Tex[index], Samp[index])), uv, 0.0);
+	vec4 c = UBO[nonuniformEXT(index)].v;
+	vec4 d = SSBO[nonuniformEXT(index)].v;
+
+	imageAtomicAdd(Img[nonuniformEXT(index)], ivec2(0), floatBitsToUint(a.x + b.y + c.z + d.w));
+}
+----
+
+===== HLSL 示例
+
+使用 DXC：
+
+[,hlsl]
+----
+Texture2D<float4> Tex[] : register(t0, space0);
+SamplerState Samp[] : register(s0, space1);
+
+struct Float4 { float4 v; };
+ConstantBuffer<Float4> CBV[] : register(b0, space2);
+RWStructuredBuffer<float4> SSBO[] : register(u0, space3);
+RWTexture2D<uint> Img[] : register(u0, space4);
+
+[numthreads(64, 1, 1)]
+void main(uint3 thr : SV_DispatchThreadID)
+{
+	uint index = thr.x;
+	float2 uv = float2(thr.yz) / 1024.0;
+	float4 a = Tex[NonUniformResourceIndex(index)].SampleLevel(Samp[NonUniformResourceIndex(index)], uv, 0.0);
+	float4 b = CBV[NonUniformResourceIndex(index)].v;
+	float4 c = SSBO[NonUniformResourceIndex(index)][0];
+
+	uint out_value;
+	InterlockedAdd(Img[NonUniformResourceIndex(index)][int2(0, 0)], asuint(a.x + b.y + c.z), out_value);
+}
+----
+
+===== 在 SPIR-V 中应关注什么
+
+在 SPIR-V 中，`NonUniform` 修饰符放置的位置可能不太直观，但规范明确：用于 load/store/sample/atomic 指令的“最终参数”应当被修饰。
+给索引表达式本身加修饰（虽然看起来自然）是无意义的。
+某些老旧且有问题的驱动确实依赖“索引本身被修饰”，因此如果你自行生成 SPIR-V，把 NonUniform 冗余地加在索引上也无妨（尽管不够优雅）……
+
+例如，对于 `nonuniform-quads.frag` 着色器，我们得到：
+
+----
+OpDecorate %27 NonUniform ; 按规范，这是唯一需要的 NonUniform
+%26 = OpSampledImage %25 %20 %24
+%27 = OpCopyObject %25 %26 ; 这是 glslangValidator 的小怪癖
+%32 = OpImageSampleImplicitLod %v4float %27 %31 ; 关键在于这里的 %27
+----
+
+对于从/向 UBO/SSBO 的 `OpLoad` 和 `OpStore`，应对指针参数使用 NonUniform；
+对于 `OpAtomic*`，也应对指针参数使用 NonUniform。
+
+== 示例（Sample）
+
+image::./images/sample.png[示例]
+
+本示例的目标是演示描述符索引所启用的两个主要用例。
+
+左侧一次绑定 64 个不同纹理，并在一个绘制调用中全部渲染。
+这利用了描述符的非统一索引，把 `gl_InstanceIndex` 作为描述符数组的索引。
+
+[,glsl]
+----
+#extension GL_EXT_nonuniform_qualifier : require
+layout(set = 0, binding = 0) uniform texture2D Textures[];
+layout(set = 1, binding = 0) uniform sampler ImmutableSampler;
+out_frag_color = texture(nonuniformEXT(sampler2D(Textures[in_texture_index], ImmutableSampler)), in_uv);
+----
+
+这里的关键是 `nonuniformEXT`，它让我们可以对一个资源数组进行索引，而该索引在动态上“不一致”。
+对于图形而言，动态一致意味着由一次绘制命令生成的所有线程的索引值都相同。
+
+右侧渲染相同的纹理，但采用“Update-After-Bind”模型：我们把描述符流式写入到一个描述符集。
+这种风格消除了描述符集管理的大部分复杂性，把描述符内存当作环形缓冲（ring buffer）。
+我们可以在 push constant 中放置这个环的偏移，例如：
+
+[,glsl]
+----
+layout(push_constant) uniform Registers
+{
+    layout(offset = 4) uint table_offset;
+} registers;
+
+void main()
+{
+    out_frag_color = texture(sampler2D(Textures[registers.table_offset], ImmutableSampler), in_uv);
+}
+----
+
+理论上在 Vulkan 的最低规范下可以支持多达 50 万纹理，但为了可视化，这么多纹理并不现实。
+
+== 调试描述符索引
+
+描述符索引非常强大，但这也意味着调试与验证这类着色器更困难。
+错误空间更大，例如：
+应用可能索引到从未初始化的描述符，或者访问资源已被销毁的陈旧描述符。
+Vulkan 中提供了一些调试与验证手段。
+
+=== RenderDoc
+
+例如，这里我们查看渲染屏幕左半部的非统一绘制调用。
+image:./images/non-uniform-draw.png[非统一绘制]
+
+RenderDoc 支持对描述符索引的调试。
+在状态面板中，我们可以看到该绘制调用实际访问了哪些描述符。
+需要注意的是，RenderDoc 必须对你的着色器进行插桩（instrumentation），用额外代码标记“实际”访问的资源。
+
+image::./images/non-uniform-usage.png[非统一使用情况]
+
+可以看到除了索引 0 以外，所有数组条目都被使用；
+索引 0 从未被访问，因为该四边形被完全裁剪。
+这是一个值得留心的小怪癖。
+
+在 Update-After-Bind 的场景中，我们一次绘制一个纹理，这类情况的调试要直观得多。
+
+image::./images/update-after-bind.png[绑定后更新]
+
+这里看到访问了索引 202，对应我们传给着色器的 push constant `table_offset`，很妙！
+
+=== GPU 辅助验证（GPU-assisted validation）
+
+使用描述符索引时，验证层无法在绘制时验证，因为它不知道着色器打算访问哪些资源；
+而在 Update-After-Bind 中，描述符可能在 `vkQueueSubmit` 之前才被填充。
+与 RenderDoc 类似，验证层也必须对着色器进行插桩，这会显著拖慢运行时。
+因此，GPU 辅助验证是可选开启的（opt-in）。
+
+在 `instance.cpp` 中，我们使用 `VK_EXT_validation_features` 来启用 GPU 辅助验证，只要在 CMake 构建中设置了 `VKB_VALIDATION_LAYERS_GPU_ASSISTED`。
+
+关键要点是：这是一项由验证层自身暴露的扩展，因此需要直接在该层上查询实例扩展。
+例如：
+
+[,cpp]
+----
+bool validation_features = false;
+uint32_t layer_instance_extension_count;
+VK_CHECK(vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &layer_instance_extension_count, nullptr));
+std::vector<VkExtensionProperties> available_layer_instance_extensions(layer_instance_extension_count);
+VK_CHECK(vkEnumerateInstanceExtensionProperties("VK_LAYER_KHRONOS_validation", &layer_instance_extension_count, available_layer_instance_extensions.data()));
+
+for (auto &available_extension : available_layer_instance_extensions)
+{
+    if (strcmp(available_extension.extensionName, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) == 0)
+    {
+        validation_features = true;
+        LOGI("{} is available, enabling it", VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+        enabled_extensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+    }
+}
+----
+
+如果存在该扩展，我们可以把需要启用的特性通过 `vkCreateInstance` 的 `pNext` 传下去：
+
+[,cpp]
+----
+VkValidationFeaturesEXT validation_features_info = {VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+if (validation_features)
+{
+    static const VkValidationFeatureEnableEXT enable_features[2] = {
+        VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT,
+        VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,
+    };
+    validation_features_info.enabledValidationFeatureCount = 2;
+    validation_features_info.pEnabledValidationFeatures    = enable_features;
+    validation_features_info.pNext                         = instance_info.pNext;
+    instance_info.pNext                                    = &validation_features_info;
+}
+----
+
+需要启用的特性是 `GPU_ASSISTED_EXT` 与 `RESERVE_BINDING_SLOT_EXT`。
+验证层会保留一个额外的描述符集插槽，以便绑定元数据缓冲。
+插桩后的着色器在执行时会往这里写入信息。
+
+如果我们启用了它，并假设“忘记更新了”索引为 3 的描述符：
+
+[,cpp]
+----
+for (unsigned i = 0; i < NumDescriptorsNonUniform; i++)
+{
+    ...
+    if (i != 3)
+        vkUpdateDescriptorSets(get_device().get_handle(), 1, &write, 0, nullptr);
+    ...
+}
+----
+
+最终会得到如下输出：
+
+----
+[error] [framework/core/instance.cpp:41] -1993010233 - UNASSIGNED-Descriptor uninitialized: Validation Error: [ UNASSIGNED-Descriptor uninitialized ] Object 0: handle = 0x55625acf5600, type = VK_OBJECT_TYPE_QUEUE; | MessageID = 0x893513c7 | Descriptor index 3 is uninitialized.  Command buffer (0x55625b187090). Draw Index 0x4. Pipeline (0x520000000052). Shader Module (0x510000000051). Shader Instruction Index = 59.  Stage = Fragment.  Fragment coord (x,y) = (930.5, 0.5).  Unable to find SPIR-V OpLine for source information.  Build shader with debug info to get source information.
+[error] [framework/core/instance.cpp:41] -1993010233 - UNASSIGNED-Descriptor uninitialized: Validation Error: [ UNASSIGNED-Descriptor uninitialized ] Object 0: handle = 0x55625acf5600, type = VK_OBJECT_TYPE_QUEUE; | MessageID = 0x893513c7 | Descriptor index 67 is uninitialized.  Command buffer (0x55625b184d60). Draw Index 0x4. Pipeline (0x520000000052). Shader Module (0x510000000051). Shader Instruction Index = 59.  Stage = Fragment.  Fragment coord (x,y) = (944.5, 0.5).  Unable to find SPIR-V OpLine for source information.  Build shader with debug info to get source information.
+[error] [framework/core/instance.cpp:41] -1993010233 - UNASSIGNED-Descriptor uninitialized: Validation Error: [ UNASSIGNED-Descriptor uninitialized ] Object 0: handle = 0x55625acf5600, type = VK_OBJECT_TYPE_QUEUE; | MessageID = 0x893513c7 | Descriptor index 131 is uninitialized.  Command buffer (0x55625b1893c0). Draw Index 0x4. Pipeline (0x520000000052). Shader Module (0x510000000051). Shader Instruction Index = 59.  Stage = Fragment.  Fragment coord (x,y) = (944.5, 0.5).  Unable to find SPIR-V OpLine for source information.  Build shader with debug info to get source information.
+----
+
+为 SPIR-V 添加调试符号会有所帮助，但这是另一个话题。
+
+== 结论
+
+描述符索引是一项非常强大的扩展，但能力越强，越需要你善用所有可用的调试工具并谨慎使用。

@@ -1,0 +1,87 @@
+////
+- Copyright (c) 2019-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 子通道（Subpasses）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/subpasses[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+Vulkan 引入“子通道（subpass）”将单个 xref:samples/performance/render_passes/README.adoc[渲染通道]划分为若干逻辑阶段。相较于使用多条渲染通道，子通道让 GPU 更易做优化；在平铺架构上可充分利用片内平铺内存，显著节省外部带宽。
+
+== 延迟渲染
+
+本示例实现延迟渲染：
+- 几何阶段：将着色所需数据写入 G-buffer（深度、反照率、法线等）；
+- 光照阶段：读取 G-buffer 进行着色；
+
+G-buffer 颜色存储预算控制在“平铺色存”128bpp 以内（有助于合并）：
+- 光照（`RGBA8_SRGB`，附件#0，受事务消除优化）
+- 深度（`D32_SFLOAT`）
+- 反照率（`RGBA8_UNORM`）
+- 法线（`RGB10A2_UNORM`，着色器中将 [-1,1] 归一到 [0,1]：`out_normal = 0.5 * in_normal + 0.5;`）
+
+光照阶段可用深度重建位置：
+
+[,glsl]
+----
+mat4 inv_view_proj  = inverse(projection * view);
+vec4 clip = vec4(in_uv * 2.0 - 1.0, subpassLoad(i_depth).x, 1.0);
+vec4 world_w = inv_view_proj * clip;
+vec3 world   = world_w.xyz / world_w.w;
+----
+
+示例可在运行时切换“两条渲染通道”与“单通道多子通道”。在两条渲染通道下，第一通道生成 G-buffer 并写回外部内存，第二通道读取；监控可见物理 tile（PTILES）与外部读写均较高。单通道+两子通道时，G-buffer 可留在平铺内存跨子通道复用，带宽显著下降。
+
+== 合并（Merging）
+
+Vulkan 规范指出：具有“简单帧缓冲空间依赖”的子通道可被合并为单个平铺渲染过程，附件数据全程片内保存。驱动可在满足条件时将 `vkCmdNextSubpass` 优化为 NOP。Arm 平台常见合并约束：
+- 合并能避免写回/读回；
+- 所有考虑的子通道中“输入+颜色附件”的唯一 `VkAttachment` 数量 ≤ 8（不含深度/模板）；
+- 深度/模板附件在子通道间不变；
+- 所有附件的 MSAA 采样数一致；
+- 总“平铺色存预算”不超过某上限（Mali 早代 128bpp，新一代可达 256bpp）；
+
+验证方法：对比两种技术下的 PTILES；在 Mali-G76 上，子通道方案相对两通道方案 tile 数约降 55%（262.2k/s vs 614.7k/s），带宽相应降低。若 G-buffer 使用更高位宽格式，可能超预算而无法合并（PTILES 上升到 ~409.6k/s）。
+
+== 瞬态附件（Transient attachments）
+
+示例中的 depth/albedo/normal 等附件：在通道开始清除，几何子通道写入，光照子通道读取，通道结束丢弃。若 GPU 片内内存足够，可完全避免写回外部内存，且无需物理分配：将用法设为 `TRANSIENT_ATTACHMENT`，内存属性设为 `LAZILY_ALLOCATED`。未正确设置会导致 fragment jobs 明显增加，因为需要写回外部内存。
+
+== 进一步阅读
+
+- Vulkan Multipass at GDC 2017
+- Deferring shading with Multipass
+- Vulkan input attachments and subpasses
+
+== 最佳实践
+
+- 建议：
+  - 使用子通道；
+  - 控制 G-buffer 颜色预算；
+  - 几何阶段后深度使用 `DEPTH_STENCIL_READ_ONLY`；
+  - 除光照缓冲外，其他附件使用 `LAZILY_ALLOCATED`；
+  - 遵循渲染通道最佳实践：附件 load 使用 `LOAD_OP_CLEAR/DONT_CARE`，瞬态存储使用 `STORE_OP_DONT_CARE`；
+- 避免：
+  - 将 G-buffer 写回外部内存；
+- 影响：
+  - 未正确使用 multipass 会导致驱动执行多个物理 pass，通道间经由主存交换中间图像，丧失 multipass 优势。
+- 调试：
+  - 通过 PTILES 与 late-Zs 等计数器判断是否合并、是否正确使用 `DEPTH_STENCIL_READ_ONLY`。

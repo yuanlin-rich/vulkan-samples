@@ -1,0 +1,150 @@
+////
+- Copyright (c) 2022-2025, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 条件渲染（Conditional rendering）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/conditional_rendering[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+:pp: {plus}{plus}
+
+image::./images/sample.png[Sample]
+
+== 概览
+
+`VK_EXT_conditional_rendering` 扩展允许基于“条件缓冲（conditional buffer）”中的值来有条件地执行渲染命令，从而在无需应用干预的情况下跳过部分渲染以降低延迟。
+
+本示例演示如何基于该扩展，条件性地切换一个复杂 glTF 模型的子网格（sub-mesh）可见性：无需更新命令缓冲，只需更新前述条件缓冲。
+
+== 条件缓冲
+
+用于条件性地执行渲染/分发（compute）命令（本示例不含 compute）。设置时需注意：
+
+- 专用缓冲用法：`VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT`
+- 缓冲格式固定为连续的 32 位数值；
+- 偏移以 32 位对齐；
+
+这使其易于映射为 C/C{pp} 侧结构：
+
+[,cpp]
+----
+std::vector<int32_t> conditional_visibility_list;
+----
+
+缓冲创建与其他缓冲无异：
+
+[,cpp]
+----
+conditional_visibility_buffer =
+    std::make_unique<vkb::core::Buffer>(get_device(),
+                        sizeof(int32_t) * conditional_visibility_list.size(),
+                        VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT,
+                        VMA_MEMORY_USAGE_CPU_TO_GPU);
+----
+
+本示例为简化使用主机可见缓冲；根据场景，设备本地缓冲可更优但需不同更新策略。
+
+== 条件执行
+
+扩展引入两条命令以在命令缓冲中标记“条件执行区域”：
+
+[,cpp]
+----
+void vkCmdBeginConditionalRenderingEXT(VkCommandBuffer commandBuffer, const VkConditionalRenderingBeginInfoEXT* pConditionalRenderingBegin);
+void vkCmdEndConditionalRenderingEXT(VkCommandBuffer commandBuffer);
+----
+
+将绘制/分发命令包裹在该区域中，只有当条件缓冲在给定偏移处为非零时才会执行。
+
+示例用法：
+
+[,cpp]
+----
+VkConditionalRenderingBeginInfoEXT conditional_rendering_info{};
+conditional_rendering_info.sType  = VK_STRUCTURE_TYPE_CONDITIONAL_RENDERING_BEGIN_INFO_EXT;
+conditional_rendering_info.buffer = conditional_buffer.buffer;
+conditional_rendering_info.offset = current_mesh_index * sizeof(int32_t);
+
+vkCmdBeginConditionalRenderingEXT(command_buffer, &conditional_rendering_info);
+vkCmdDrawIndexed(...);
+vkCmdEndConditionalRenderingEXT(command_buffer);
+----
+
+若该偏移处的 32 位值为 0，则 `vkCmdDrawIndexed` 不执行。将该值由 0 改为 1 并同步，则下一次绘制会执行该绘制命令。
+
+在实际示例中，我们为 glTF 场景的每个节点建立一个 32 位条目：
+
+[,cpp]
+----
+conditional_visibility_list.resize(linear_scene_nodes.size());
+std::fill(conditional_visibility_list.begin(), conditional_visibility_list.end(), 1);
+
+conditional_visibility_buffer =
+    std::make_unique<vkb::core::Buffer>(get_device(),
+                        sizeof(int32_t) * conditional_visibility_list.size(),
+                        VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT,
+                        VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+conditional_visibility_buffer->update(conditional_visibility_list.data(), sizeof(int32_t) * conditional_visibility_list.size());
+----
+
+每个可见节点按其唯一索引映射到条件缓冲条目（偏移 = `node_index * sizeof(int32_t)`）：
+
+image::./images/conditional-buffer-mapping.png[Buffer mapping]
+
+随后命令缓冲遍历 glTF 线性节点列表，将每个节点的绘制包裹在条件渲染块中，仅当该偏移处值为 1 时才绘制：
+
+[,cpp]
+----
+uint32_t node_index = 0;
+for (auto &node : linear_scene_nodes)
+{
+    glm::mat4 node_transform = node.node->get_transform().get_world_matrix();
+    VkDeviceSize offsets[1] = {0};
+
+    const auto &vertex_buffer_pos    = node.sub_mesh->vertex_buffers.at("position");
+    const auto &vertex_buffer_normal = node.sub_mesh->vertex_buffers.at("normal");
+    auto &      index_buffer         = node.sub_mesh->index_buffer;
+
+    auto mat = dynamic_cast<const vkb::sg::PBRMaterial *>(node.sub_mesh->get_material());
+
+    VkConditionalRenderingBeginInfoEXT conditional_rendering_info{};
+    conditional_rendering_info.sType  = VK_STRUCTURE_TYPE_CONDITIONAL_RENDERING_BEGIN_INFO_EXT;
+    conditional_rendering_info.buffer = conditional_visibility_buffer->get_handle();
+    conditional_rendering_info.offset = sizeof(int32_t) * node_index;
+    vkCmdBeginConditionalRenderingEXT(draw_cmd_buffers[i], &conditional_rendering_info);
+
+    // Push constants per-node
+    push_const_block.model_matrix = node_transform;
+    push_const_block.color        = glm::vec4(mat->base_color_factor.rgb, 1.0f);
+    vkCmdPushConstants(draw_cmd_buffers[i], pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push_const_block), &push_const_block);
+
+    vkCmdBindVertexBuffers(draw_cmd_buffers[i], 0, 1, vertex_buffer_pos.get(), offsets);
+    vkCmdBindVertexBuffers(draw_cmd_buffers[i], 1, 1, vertex_buffer_normal.get(), offsets);
+    vkCmdBindIndexBuffer(draw_cmd_buffers[i], index_buffer->get_handle(), 0, node.sub_mesh->index_type);
+
+    vkCmdDrawIndexed(draw_cmd_buffers[i], node.sub_mesh->vertex_indices, 1, 0, 0, 0);
+
+    vkCmdEndConditionalRenderingEXT(draw_cmd_buffers[i]);
+
+    node_index++;
+}
+----
+
+通过上述设置，仅需更改条件缓冲中对应偏移的值，便可切换 glTF 场景各节点的可见性。

@@ -1,0 +1,64 @@
+////
+- Copyright (c) 2019-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 正确使用表面旋转（Appropriate use of surface rotation）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/surface_rotation[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+移动设备可旋转，窗口“逻辑方向”可能与显示“物理方向”不一致，应用需支持横竖屏。部分显示子系统始终以“面板物理方向”工作，因而应用输出需旋转。
+
+OpenGL ES 常由驱动透明处理窗口表面的逻辑旋转，但 Vulkan 将其显式化，需应用自身处理。本示例聚焦“预旋转（pre-rotation）”并分析其性能影响。
+
+== 预旋转
+
+旋转可通过多种路径完成：
+- 由显示处理单元（DPU）在硬件中透明处理（取决于设备支持）；
+- 由 Android 合成器插入一条旋转合成通道（可能用 GPU 或专用 2D 模块），对应用透明但产生系统级开销（额外带宽/计算）；
+- 由 Vulkan 应用自身处理：渲染到与面板物理方向一致的窗口表面，即预旋转；
+
+应用无法得知设备是否在合成阶段免费旋转，因此唯一能保证“零额外处理”的方法是：渲染到与面板物理方向一致的窗口表面，去掉 Android 合成器的旋转步骤。
+
+== 示例应用
+
+示例展示如何在 Vulkan 中避免使用 Android 合成器旋转：运行时可切换是否启用预旋转，并通过屏幕上的硬件计数对比两种模式。实现步骤概要：
+- 无预旋转：销毁帧缓冲与交换链；按新 surface 尺寸重建交换链（忽略 `preTransform`），此时 `preTransform` 与 `currentTransform` 不一致，Android 合成器会在呈现前旋转；
+- 预旋转：销毁帧缓冲与交换链；按旧交换链尺寸重建，设置 `preTransform = surfaceCapabilities.currentTransform`，告知系统无需旋转；重建帧缓冲；调整 MVP（在投影前做旋转）；渲染；
+
+Android 侧需在 manifest 的 `configChanges` 中声明 `orientation|screenSize`，并监听 `APP_CMD_CONTENT_RECT_CHANGED` 事件以获知方向变化。
+
+重建交换链时从 `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` 获取 `currentTransform` 并传入 `VkSwapchainCreateInfoKHR::preTransform`，同时在 90°/270° 时交换宽高以保持交换链图像尺寸与几何预旋转一致。随后在相机的投影前乘以一个 Z 轴旋转矩阵（90/180/270°），将其记录为 pre-rotation 矩阵并用于推送到着色器。
+
+== 性能影响
+
+在不具备“DPU 旋转”的设备上，若不启用预旋转，帧缓冲需经过 2D 旋转模块的读写，外部内存总线“读/写 stall”显著上升（示例从 ~12%/7% 上升到 ~22%/17%）。Streamline 也显示启用/禁用预旋转交替时的内存压力变化。即便场景不重带宽，额外合成步骤的系统负载仍会损伤续航。
+
+== 最佳实践
+
+- 建议：
+  - 让 `VkSwapchainCreateInfoKHR::preTransform` 与 `vkGetPhysicalDeviceSurfaceCapabilitiesKHR::currentTransform` 一致以避免合成器旋转；
+  - 当获取交换链图像返回 `VK_SUBOPTIMAL_KHR/VK_ERROR_OUT_OF_DATE_KHR` 时，重建交换链并考虑 `currentTransform` 的变更；
+- 避免：
+  - 认为 `currentTransform` 之外的转换免费；Android 总会报告全部转换“支持”，因为 GPU 可作为兜底实现；
+- 影响：
+  - 非原生方向可能需要在呈现引擎中增加额外变换通道（GPU 或 2D 模块），增加带宽与功耗；
+- 调试：
+  - 通过 Streamline 等系统分析器观察额外内存负载（直接 GPU 参与或间接内存压力）。

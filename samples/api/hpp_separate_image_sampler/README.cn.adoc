@@ -1,0 +1,138 @@
+////
+- Copyright (c) 2022-2023, The Khronos Group
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+:doctype: book
+:pp: {plus}{plus}
+
+= 使用 Vulkan-Hpp 分离采样器与图像（Separating samplers and images with Vulkan-Hpp）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/hpp_separate_image_sampler[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+说明：这是 API 示例 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/separate_image_sampler[Separate image sampler] 的 HPP 版本，展示如何使用由 vulkan.hpp 提供的 Vulkan C{pp} 绑定。
+
+本教程与配套示例代码演示了如何在 Vulkan 应用中将采样器（sampler）与图像（image）解耦。与“组合图像采样器”相反，这允许应用在着色器中自由组合任意的图像与采样器。
+
+在示例中，我们创建一个图像与多个具有不同过滤选项的采样器；运行时可选择用于该图像的采样器。由于图像与采样器对象分离，运行时仅需选择不同的描述符即可。
+
+== 在应用侧
+
+从应用视角，图像与采样器总是分别创建的：
+
+- 通过图像的 `vk::ImageView` 访问图像；
+- 通过 `vk::Sampler` 指定如何对图像进行采样；
+
+差异始于描述符层面（着色器如何访问图像与采样器）：
+
+- 分离方案：对被采样的图像使用 `vk::DescriptorType::eSampledImage`，对采样器使用 `vk::DescriptorType::eSampler`，从而将二者分开：
+
+[,cpp]
+----
+// 仅引用图像的描述信息
+vk::DescriptorImageInfo image_info({}, texture.image->get_vk_image_view().get_handle(), vk::ImageLayout::eShaderReadOnlyOptimal);
+
+// 采样图像的写描述符
+vk::WriteDescriptorSet image_write_descriptor_set(base_descriptor_set, 1, 0, vk::DescriptorType::eSampledImage, image_info);
+
+// 绑定集：0 = UBO，1 = 片段着色器采样图像
+std::array<vk::WriteDescriptorSet, 2> write_descriptor_sets = {{
+    {base_descriptor_set, 0, 0, vk::DescriptorType::eUniformBuffer, {}, buffer_descriptor},
+    image_write_descriptor_set
+}};
+get_device()->get_handle().updateDescriptorSets(write_descriptor_sets, {});
+----
+
+随后创建两个过滤选项不同的采样器，并分别写入其描述符：
+
+[,cpp]
+----
+// 为每个采样器分配一个描述符集
+descriptor_set_alloc_info.pSetLayouts = &sampler_descriptor_set_layout;
+for (size_t i = 0; i < sampler_descriptor_sets.size(); i++)
+{
+    sampler_descriptor_sets[i] = get_device()->get_handle().allocateDescriptorSets(descriptor_set_alloc_info).front();
+
+    // 仅引用采样器的描述信息
+    vk::DescriptorImageInfo sampler_info(samplers[i]);
+
+    vk::WriteDescriptorSet sampler_write_descriptor_set(sampler_descriptor_sets[i], 0, 0, vk::DescriptorType::eSampler, sampler_info);
+
+    get_device()->get_handle().updateDescriptorSets(sampler_write_descriptor_set, {});
+}
+----
+
+绘制阶段，将包含“被采样图像”的描述符绑定到 set 0，将当前选择的“采样器”描述符绑定到 set 1：
+
+[,cpp]
+----
+// 绑定 UBO 与采样图像到 set 0
+draw_cmd_buffers[i].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_layout, 0, base_descriptor_set, {});
+// 绑定当前选择的采样器到 set 1
+draw_cmd_buffers[i].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_layout, 1, sampler_descriptor_sets[selected_sampler], {});
+...
+draw_cmd_buffers[i].drawIndexed(index_count, 1, 0, 0, 0);
+----
+
+== 在着色器侧
+
+在使用 vulkan.hpp 时，着色器代码本身无需特殊改动。按上述分离方案，片段着色器接口也将采样器与图像分为两个独立的 uniform：
+
+[,glsl]
+----
+layout (set = 0, binding = 1) uniform texture2D _texture;
+layout (set = 1, binding = 0) uniform sampler _sampler;
+----
+
+要以 `_sampler` 为采样器从 `_texture` 引用的图像采样，可在片段着色器中通过 `sampler2D` 在运行时构造采样图像：
+
+[,glsl]
+----
+void main()
+{
+    vec4 color = texture(sampler2D(_texture, _sampler), inUV);
+}
+----
+
+== 与“组合图像采样器”的对比
+
+若使用组合图像采样器：
+
+- 应用侧使用 `VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER`，在一个描述符中同时设置图像与采样器：
+
+[,cpp]
+----
+// 同时引用图像与采样器
+vk::DescriptorImageInfo image_info(texture.sampler, texture.view, texture.image_layout);
+
+vk::WriteDescriptorSet image_write_descriptor_set(descriptor_set, 1, {}, vk::DescriptorType::eCombinedImageSampler, image_info);
+----
+
+- 着色器仅使用一个 uniform，不再在运行时构造 `sampler2D`：
+
+[,glsl]
+----
+layout (binding = 1) uniform sampler2D _combined_image;
+
+void main()
+{
+    vec4 color = texture(_combined_image, inUV);
+}
+----
+
+相较分离方案，切换采样器时要么需要为每个图像/采样器组合创建多个描述符，要么重建描述符。

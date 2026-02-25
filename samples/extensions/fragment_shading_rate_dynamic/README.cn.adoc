@@ -1,0 +1,59 @@
+////
+- Copyright (c) 2022-2025, Holochip
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 片段着色率（动态）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/fragment_shading_rate_dynamic[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+KHR 片段着色率扩展允许在同一渲染图像中按区域选择不同的采样率。这在“极高分辨率渲染”或“图像频率分布不均匀”时尤其有用。本教程演示一种控制采样率的方法：依据每个像素的频率信息估计下一帧的着色率。
+
+扩展通过设备扩展 https://www.khronos.org/registry/vulkan/specs/latest/man/html/VK_KHR_fragment_shading_rate.html[`VK_KHR_fragment_shading_rate`] 与设备特性 https://www.khronos.org/registry/vulkan/specs/latest/man/html/VkPhysicalDeviceFragmentShadingRateFeaturesKHR.html[`VkPhysicalDeviceFragmentShadingRateFeaturesKHR`] 启用。本示例演示“附件能力（attachment capability）”用法：在渲染通道子通道的 pNext 链中附加 https://www.khronos.org/registry/vulkan/specs/latest/man/html/VkFragmentShadingRateAttachmentInfoKHR.html[`VkFragmentShadingRateAttachmentInfoKHR`] 将着色率图像作为附件引用。
+
+== 着色率图像（Shading Rate Image）
+
+作为附件使用时，着色率图像的每个像素控制输出图像内由 `shadingRateAttachmentTexelSize` 指定的一个固定区块（texel）。例如，着色率图像的一个像素可控制渲染图像中的 4×4 texel；由于该 texel 内的所有输出像素采用相同着色率，着色率图像分辨率更低。设备支持的着色率集合可通过 https://www.khronos.org/registry/vulkan/specs/latest/man/html/vkGetPhysicalDeviceFragmentShadingRatesKHR.html[`vkGetPhysicalDeviceFragmentShadingRatesKHR`] 查询，可能包含 x/y 方向不同的着色率（如 1×2 或 4×2）。示例在计算着色阶段会用到这些支持值。
+
+本示例根据图像频率动态调整着色率：在片段着色阶段于 `location=1` 的附件中估计 `dFdx/dFdy` 导数；随后一个计算着色器在每个着色率 texel 上处理导数，得出下一帧的着色率：导数平方较大的 texel 在下一帧会采用更高着色率，导数较小的区域则采用更低着色率。可在 GUI 中选择“Frequency”可视化该频率信息。
+
+== 着色率编码
+
+着色率以 8 位无符号整型编码。例如，最低着色率的 4×4 texel 编码为 `(4>>1) | (4<<1)`；一般形式 `rate_x×rate_y` 为 `(rate_x>>1) | (rate_y<<1)`。尽管各设备支持的 texel 尺寸不同，但最大不超过 4×4。GUI 中可选择“Shading Rates”查看着色率图像，较亮区域表示采样密度更高。
+
+== 实现细节
+
+本示例引入一个独立的计算管线与若干图像：
+- `shading_rate_image`：供片段着色器作为附件控制着色率；
+- `frequency_content_image`：片段阶段输出附件，记录每像素导数；
+- `shading_rate_image_compute`：计算阶段输出图像；
+
+`frequency_content_image` 类型为 `vec2` 存储 x/y 导数平方，计算着色器据此估计所需着色率，并在支持的着色率集合中选取最接近的值，转换为 8 位编码并写入 `shading_rate_image_compute`：
+
+----
+uint rate_code = uint(optimal_rate_x >> 1) | (optimal_rate_y << 1);
+----
+
+由于片段着色率扩展对图像格式与用法的要求（以及用法位不兼容），`shading_rate_image` 与 `shading_rate_image_compute` 为两个不同图像，分别使用 `VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR` 与 `VK_IMAGE_USAGE_STORAGE_BIT`（另含传输位）。计算完成后，将 `shading_rate_image_compute` 的内容拷贝至 `shading_rate_image`。
+
+== 在独立渲染通道计算频率
+
+若在主渲染通道计算频率信息，下一帧使用上一帧着色率会形成反馈导致不稳定或“抖动”。因此本示例引入一个独立的渲染通道，不使用着色率附件，仅用于计算频率信息，并以可调的低分辨率执行（GUI 中“Subpass size reduction”）。生产环境下可关闭 MSAA 进一步加速。
+
+示例说明：在 4×4 降采样且关闭 MSAA 的情况下，频率计算仅需完整分辨率 8×MSAA 的 1/128 样本数；若由此着色率图像将主渲染的样本数减半，总体样本减少仍超过 40%。

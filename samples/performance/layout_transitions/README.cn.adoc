@@ -1,0 +1,69 @@
+////
+- Copyright (c) 2019-2024, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 布局转换（Layout transitions）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/layout_transitions[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+Vulkan 要求应用管理图像布局，确保所有渲染通道的附件在开始时处于正确布局。通常通过管线屏障，或在渲染通道中设置 `initialLayout/finalLayout` 完成。
+
+在复杂流水线中，维护每张图的正确布局并不简单；若不需要保留先前内容，最“方便”的做法是将 `oldLayout/initialLayout` 设为 `VK_IMAGE_LAYOUT_UNDEFINED`。虽功能正确，但可能阻碍 GPU 的某些优化。
+
+本教程展示这一优化与如何避免“次优布局”带来的性能损耗。
+
+== Mali GPU 的事务消除（Transaction Elimination）
+
+Mali GPU 通过“事务消除”避免对帧缓冲静态区域的写带宽，尤其适用于包含大量静态不透明叠加的场景。其适用条件包括：
+- 采样数为 1；
+- mip 级别为 1；
+- 图像使用 `COLOR_ATTACHMENT_BIT`；
+- 不使用 `TRANSIENT_ATTACHMENT_BIT`；
+- 仅使用单个颜色附件（不适用于 Mali G51 及之后机型）；
+- 有效平铺大小为 16×16 像素（由像素数据存储决定）；
+
+驱动为图像维护“签名缓冲”，用于判断冗余写入。要保持签名与图像内容一致，图像仅应在“平铺写路径”中使用，即处于“只读或仅片段着色可写”的安全布局：
+- `COLOR_ATTACHMENT_OPTIMAL`
+- `SHADER_READ_ONLY_OPTIMAL`
+- `TRANSFER_SRC_OPTIMAL`
+- `PRESENT_SRC_KHR`
+
+其他布局（含 `UNDEFINED`）都视为“不安全”，允许在平铺写路径之外写图像；当经由“不安全”布局转换时，签名缓冲必须失效以防反序。交换链图像是特殊例外：从 `UNDEFINED` 转换仍视为“安全”。
+
+此外，签名失效可能发生在 `VkImageMemoryBarrier/vkCmdPipelineBarrier/vkCmdWaitEvents`，或当颜色附件引用布局与最终布局不同的 `VkRenderPass`。`vkCmdBlitImage` 的帧缓冲传输阶段也总会使签名失效，因此“着色器实现的 blit”通常更高效。
+
+== 示例
+
+示例搭建了两条渲染通道的延迟渲染，展示将 G-buffer 从 `UNDEFINED` 而非“上次已知布局”进行转换的影响。若改用“上次已知布局”作为旧布局（oldLayout），事务消除可发挥作用：计数器显示 CRC 匹配导致的 tile kill 数约翻倍、写带宽约降低 10%。
+
+降低内存带宽有助于降低功耗、缓解发热并延长续航；在带宽受限的场景中也可能提升性能。更高效的延迟渲染可参考“子通道”实现（见 subpasses 教程）。
+
+== 最佳实践
+
+- 建议：
+  - 颜色附件使用 `COLOR_ATTACHMENT_OPTIMAL`；
+  - 让图像保持在“安全布局”，避免不必要的签名失效，包括尽量避免经 `UNDEFINED` 中转；
+  - 用 `storeOp=DONT_CARE` 跳过不需要的渲染目标写入，优于使用 `UNDEFINED` 布局；
+- 避免：
+  - 非必要地将颜色附件从“安全”切至“不安全”；
+  - 用 `vkCmdBlitImage` 复制常量数据，改用着色器 blit 更可能保持签名一致；
+- 影响：
+  - 失去事务消除会增加静态区域的外部带宽，可能降低性能并增加功耗；
+- 调试：
+  - 通过 GPU 计数器统计“因事务消除而被杀的 tile 写入”，观察其是否被触发。

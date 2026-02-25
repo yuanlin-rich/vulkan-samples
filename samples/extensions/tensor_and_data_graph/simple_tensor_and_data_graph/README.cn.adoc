@@ -1,0 +1,126 @@
+////
+- Copyright (c) 2024-2025, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 简单的张量与数据图（Simple tensor and data graph）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/extensions/tensor_and_data_graph/simple_tensor_and_data_graph[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+本示例展示如何使用 `VK_ARM_tensors` 与 `VK_ARM_data_graph` 扩展进行机器学习推理。它们提供定义张量数据与构建神经网络计算图的方法，并可利用硬件加速执行。
+
+这是该系列的首个示例。完整列表参见上级页面 xref:samples/extensions/tensor_and_data_graph/README.adoc[张量与数据图]。
+
+NOTE: 尽管本示例中的模型使用 https://www.mlplatform.org/tosa/[TOSA 算子] 表达，但目前 Vulkan API 尚无法查询对 TOSA 的支持。若实现不包含对特定 TOSA 算子的支持，则执行可能失败。
+
+== 环境准备
+
+如需构建与运行本示例，请先按照 xref:samples/extensions/tensor_and_data_graph/README.adoc[张量与数据图] 页面中的步骤完成环境准备。
+
+== 介绍
+
+本示例运行一个最小神经网络：输入为单个张量（batch=1，宽高 10，3 通道），其数据为 CPU 上传的固定色彩模式。网络包含单个 2D 平均池化层。为将输入与输出张量内容显示到窗口，网络执行后运行一条计算着色器将两者“绘制”到图像中并 blit 到窗口。流程如下：
+
+image::./images/flow.svg[Sample]
+
+运行效果如下：
+
+image::./images/sample.png[Sample]
+
+== 数据图管线
+
+image::./images/network.svg[Sample,align="center"]
+
+网络通过一种新管线——“数据图管线（data graph pipeline）”执行。其使用流程与计算/图形管线类似：
+- 将神经网络封装为可由命令缓冲调度的“数据图管线”；
+- 通过描述符集访问外部资源，其对外接口由“管线布局”描述；
+- 创建描述符集布局与管线布局；
+- 创建数据图管线；
+- 为管线创建“数据图管线会话（session）”以提供运行所需的状态与内存；
+- 创建网络的输入/输出张量，分配描述符集并写入绑定；
+- 在命令缓冲中绑定并调度执行。
+
+需要创建的对象概览：
+
+1. 描述符集布局与管线布局（描述与数据图管线的接口）
+2. 数据图管线（封装网络）
+3. 数据图管线会话（承载运行所需状态/内存）
+4. 输入/输出张量对象
+5. 描述符集（向管线传递张量资源）
+
+=== 管线接口
+
+外部接口由描述符集布局与管线布局描述，如同计算/图形管线：
+
+image::./images/pipeline_interface.svg[Sample,align="center"]
+
+创建代码位于 `prepare_data_graph_pipeline`，主要由 `DataGraphPipelineLayout` 完成：其构造一个包含两条张量绑定的 `VkDescriptorSetLayout`，并据此创建 `VkPipelineLayout`。
+
+=== 管线
+
+神经网络以 SPIR-V 模块描述，并通过描述符集访问外部资源。此示例的 SPIR-V 内容在文末附录概述。此处只需知道它消费一个输入张量、产生一个输出张量，并执行“池化”将宽高减半。
+
+创建流程与计算/图形管线类似：先创建 `VkShaderModule`，再用 `vkCreateDataGraphPipelinesARM` 创建“数据图管线”。需额外提供资源信息（不在 SPIR-V 中）：对管线布局中的每个绑定提供 `VkDataGraphPipelineResourceInfoARM`，描述张量的维度、内存布局与元素类型。
+
+=== 管线会话
+
+数据图管线执行需要状态与内存。实现内部管理这些状态，但需外部提供内存。样例使用 VMA 为会话分配与绑定内存（流程与图像/缓冲相似）：创建会话→查询绑定点→查询内存需求→分配内存→绑定。
+
+=== 张量
+
+张量资源的创建与使用类似图像/缓冲：
+1) 由描述（尺寸、平铺、用途等）创建；2) 查询内存需求；3) 分配内存；4) 绑定；5) 创建视图供管线使用。
+
+示例提供 `Tensor`/`TensorView` 辅助类，并使用 VMA 抽象内存分配。视图通常与张量格式一致。
+
+输入张量为四维 `VK_FORMAT_R32_SFLOAT`，表示一个小 RGB 图（batch=1，10×10，3 通道）；输出张量宽高减半，通道仍为 3。两者均声明 `VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM` 用于数据图管线。输入张量的数据从 CPU 写入，为便于主机访问选择线性平铺。
+
+=== 描述符集
+
+通过描述符集将张量资源提供给数据图管线：从池分配集合，写入输入与输出张量视图到各自绑定位，类型为 `VK_DESCRIPTOR_TYPE_TENSOR_ARM`，张量信息通过 `pNext` 传递。
+
+=== 命令缓冲
+
+执行方式与计算/图形管线类似：在命令缓冲绑定数据图管线与描述符集，然后 `vkCmdDispatchDataGraphARM` 调度。
+
+== 实用说明
+
+数据图管线输出的张量可按多种方式使用：
+- 直接作为张量资源在其他着色器中读取（本示例做法）；
+- 与常规 `VkImage` 共享底层存储，作为纹理采样；
+- 与常规 `VkBuffer` 共享底层存储，在其他着色器中读取；
+- 映射为主机可见内存，回读到 CPU 处理。
+
+输入的生成方式同理：可由其他着色器写入、与图像/缓冲共享、或由 CPU 写入（本示例做法）。
+
+与图像/缓冲类似，张量访问也需正确同步。通常在命令缓冲中添加屏障，确保顺序与可见性。为此提供了“张量内存屏障”（类似图像/缓冲屏障）。
+
+== 小结
+
+本示例介绍了 VK_ARM_tensors 与 VK_ARM_data_graph，并展示如何运行一个简单神经网络：创建管线布局、数据图管线、会话、张量与描述符集，并在命令缓冲中绑定并调度。后续示例将在此基础上进一步展开。
+
+== 附录 A：用于神经网络的 SPIR-V 程序
+
+可用 SPIR-V 模块描述神经网络，但与图形/计算着色器不同，数据图管线暂无 GLSL/HLSL 语法。通常使用上层模型描述转换生成 SPIR-V（如 link:https://github.com/arm/ai-ml-sdk-model-converter[ML SDK Model Converter]）。为避免引入更多依赖，示例直接编写了 SPIR-V 汇编，组装流程与图形/计算着色器一致。
+
+Boilerplate：启用 Shader、TensorsARM、GraphARM 能力与扩展，并导入 TOSA 扩展指令集；
+接口：声明描述符集与绑定，并在 SPIR-V 中与 C++ 侧的管线布局相对应；
+类型：声明张量类型与图类型；
+入口与图定义：通过 `OpGraphEntryPointARM` 导出入口名 "main"，并列出网络中的算子（本例为 AVG_POOL2D）。

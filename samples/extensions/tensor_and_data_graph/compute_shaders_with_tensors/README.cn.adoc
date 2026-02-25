@@ -1,0 +1,139 @@
+////
+- Copyright (c) 2025-2026, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 结合张量的计算着色器（Compute Shaders with Tensors）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/extensions/tensor_and_data_graph/compute_shaders_with_tensors[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/sample.png[Sample]
+
+== 概览
+
+本示例是该系列的第三个示例，承接 xref:samples/extensions/tensor_and_data_graph/graph_constants/README.adoc[`graph_constants`]。建议先阅读 xref:samples/extensions/tensor_and_data_graph/README.adoc[本系列前述示例]。本示例演示使用计算着色器为数据图管线生成输入并处理其输出。
+
+== 环境准备
+
+如需构建与运行本示例，请先按照 xref:samples/extensions/tensor_and_data_graph/README.adoc[张量与数据图] 页面中的步骤完成环境准备。
+
+== 介绍
+
+许多真实应用组合使用“机器学习运算 + 自定义计算着色器”。本示例展示如何将计算着色器与数据图管线结合：运行一个简单的卷积神经网络（2D 卷积层），它消费一个由计算着色器生成的输入张量、常量权重与常量偏置；网络输出随后由另一条计算着色器进行旋转等后处理。为在窗口中显示张量内容，后处理之后再运行一条计算着色器将张量“绘制”到图像中并 blit 到窗口。
+
+image::./images/flow.svg[Flow]
+
+== 在计算着色器中访问张量
+
+张量资源的访问方式与图像/缓冲类似：通过描述符集绑定，在 GLSL 中用内建函数读写。首先在着色器中启用 `GL_ARM_tensors` 扩展：
+
+[source,cpp,options="nowrap"]
+----
+#extension GL_ARM_tensors : enable
+----
+
+随后声明描述符集接口。在此我们声明两份张量资源：
+- 绑定集 0，binding 0：输入张量；
+- 绑定集 0，binding 1：输出张量（writeonly）。
+
+两者的类型均为 `tensorARM<float, 4>`，即秩为 4、元素类型为 float：
+
+[source,cpp,options="nowrap"]
+----
+layout (set = 0, binding = 0) uniform tensorARM<float, 4> input_tensor;
+layout (set = 0, binding = 1) writeonly uniform tensorARM<float, 4> output_tensor;
+----
+
+在代码中通过 `tensorReadARM` 与 `tensorWriteARM` 分别读/写张量。坐标以整型数组传入，长度等于张量秩（此处为 4）。本示例将张量视为二维图像，最后一维为通道（RGB），因此使用全局调用 ID 确定元素位置；通过传入元素数组一次读/写整个颜色（`float[3]`）：
+
+[source,cpp,options="nowrap"]
+----
+void main()
+{
+    // 坐标采用 NHWC 顺序
+    uint coords[4] = uint[](0, gl_GlobalInvocationID.y, gl_GlobalInvocationID.x, 0);
+    float[3] value;
+
+    // 读取输入张量
+    tensorReadARM(input_tensor, coords, value);
+
+    // 处理 value
+
+    // 写回输出张量
+    tensorWriteARM(output_tensor, coords, value);
+}
+----
+
+示例包含两条计算着色器：预处理着色器使用三角函数生成 `input_tensor`；后处理着色器从数据图管线输出的 `output_tensor` 读取元素，写入不同位置到 `postprocessed_tensor` 完成旋转。
+
+== 将张量绑定到计算着色器
+
+绑定方式与图像/缓冲一致，也与绑定到数据图管线的输入/输出一致：
+
+[source,cpp,options="nowrap"]
+----
+std::map<uint32_t, VkWriteDescriptorSetTensorARM> tensor_bindings =
+{
+    // 绑定 0：来自数据图管线的输出张量
+    {0, VkWriteDescriptorSetTensorARM{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_TENSOR_ARM, nullptr, 1, &output_tensor_view->get_handle()}},
+    // 绑定 1：写入的后处理张量
+    {1, VkWriteDescriptorSetTensorARM{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_TENSOR_ARM, nullptr, 1, &postprocessed_tensor_view->get_handle()}}
+};
+
+std::vector<VkWriteDescriptorSet> writes;
+for (const auto &tensor_binding : tensor_bindings)
+{
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet          = descriptor_set;
+    write.dstBinding      = 0;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_TENSOR_ARM;
+    // 张量信息经由 pNext 提供（不同于图像/缓冲的 p*Info）
+    write.pNext           = &tensor_binding.second;
+    write.descriptorCount = 1;
+    writes.push_back(write);
+}
+
+vkUpdateDescriptorSets(get_device().get_handle(), writes.size(), writes.data(), 0, nullptr);
+----
+
+== 张量内存屏障
+
+跨多条命令使用同一张量时，需要正确同步内存访问。本示例中：
+- `input_tensor`：由计算着色器写入，随后被数据图管线读取；
+- `output_tensor`：由数据图管线写入，随后被后处理计算着色器读取；
+
+使用“张量内存屏障”实现同步（类似图像/缓冲屏障）。数据图管线新增了相应的管线阶段与访问标志。如下是 `input_tensor` 的屏障示例：
+
+[source,cpp,options="nowrap"]
+----
+VkTensorMemoryBarrierARM tensor_barrier = {VK_STRUCTURE_TYPE_TENSOR_MEMORY_BARRIER_ARM};
+tensor_barrier.tensor                   = input_tensor->get_handle();
+tensor_barrier.srcStageMask             = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+tensor_barrier.srcAccessMask            = VK_ACCESS_2_SHADER_WRITE_BIT;
+tensor_barrier.dstStageMask             = VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM;
+tensor_barrier.dstAccessMask            = VK_ACCESS_2_DATA_GRAPH_READ_BIT_ARM;
+VkDependencyInfo dependency_info        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+dependency_info.pNext                   = &tensor_barrier;
+vkCmdPipelineBarrier2(command_buffer.get_handle(), &dependency_info);
+----
+
+`output_tensor` 也需类似的屏障。
+
+== 小结
+
+本示例介绍了如何将计算着色器与数据图管线结合，以及如何在多次调度间正确同步张量的内存访问。示例只是浅尝辄止，但可作为编写“访问张量的计算着色器”的入门参考。

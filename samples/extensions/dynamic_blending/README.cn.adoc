@@ -1,0 +1,54 @@
+////
+- Copyright (c) 2023-2025, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 动态混合（Dynamic blending）
+
+== 概览
+
+本示例演示 `VK_EXT_extended_dynamic_state3` 中与颜色混合相关的功能，包含：
+
+- `vkCmdSetColorBlendEnableEXT`：开启/关闭混合；
+- `vkCmdSetColorBlendEquationEXT`：设置混合运算符与因子；
+- `vkCmdSetColorBlendAdvancedEXT`：使用更复杂的高级混合运算符；
+- `vkCmdSetColorWriteMaskEXT`：按通道开启/关闭写入；
+
+== 在 Vulkan 中如何使用
+
+- 需启用设备扩展 `VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME`；
+- 高级混合方程需启用 `VK_EXT_BLEND_OPERATION_ADVANCED_EXTENSION_NAME`；
+- 下列函数均接收“数组参数”，用于为随后的各个颜色附件指定各自的行为：
+  - `vkCmdSetColorBlendEnableEXT`：传入布尔数组以切换是否启用混合；
+  - `vkCmdSetColorBlendEquationEXT`：传入 `VkColorBlendEquationEXT` 数组以设置颜色/Alpha 的运算符与因子；
+  - `vkCmdSetColorBlendAdvancedEXT`：传入 `VkColorBlendAdvancedEXT` 数组以设置颜色混合的高级运算与预乘选项；
+  - `vkCmdSetColorWriteMaskEXT`：传入 `VkColorComponentFlags` 数组（用按位或组合所需的颜色通道位）。
+
+== 示例
+
+示例展示了：
+- 如何启用相关扩展；
+- 如何为上述方法设置参数；
+
+并通过可视化演示各混合运算对颜色混合效果的影响。
+
+== 文档链接
+
+- https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetColorBlendEnableEXT.html
+- https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetColorBlendEquationEXT.html
+- https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetColorBlendAdvancedEXT.html
+- https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetColorWriteMaskEXT.html

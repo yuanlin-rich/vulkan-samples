@@ -1,0 +1,69 @@
+////
+- Copyright (c) 2023-2025, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 跨厂商 OpenCL 与 Vulkan 互操作（Cross vendor OpenCL and Vulkan interoperability）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/open_cl_interop[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 背景
+
+尽管 Vulkan 必须支持计算，但在一些场景（如复杂科学计算或复用既有 OpenCL 内核）仍需要 OpenCL 更丰富的计算特性。两套 API 提供跨厂商的“外部对象”扩展，允许在二者之间零拷贝共享对象（即“API 互操作”）。零拷贝意味着双方无需复制即可直接访问同一对象，从而高效共享。
+
+== 示例
+
+image::./images/open_cl_interop.jpg[OpenCL interop sample]
+
+本示例演示使用 OpenCL 计算内核更新图像，并在 Vulkan 中将其作为纹理显示在四边形上；二者通过共享信号量同步。
+
+== 所需扩展
+
+两套 API 都提供“外部对象”扩展。本示例共享图像与信号量，需要在双方启用对应扩展：
+- Vulkan 图像内存共享：实例 `VK_KHR_external_memory_capabilities`，设备 `VK_KHR_external_memory`；平台相关：Windows `VK_KHR_external_memory_win32`，Unix `VK_KHR_external_memory_fd`。OpenCL 对应：`cl_khr_external_memory`、`cl_khr_external_memory_win32`（Windows）、`cl_khr_external_memory_opaque_fd`（Unix）。
+- 信号量共享：Vulkan 实例 `VK_KHR_external_semaphore_capabilities`，设备 `VK_KHR_external_semaphore`；平台相关：Windows `VK_KHR_external_semaphore_win32`，Unix `VK_KHR_external_semaphore_fd`。OpenCL 对应：`cl_khr_external_semaphore`、`cl_khr_external_semaphore_win32`（Windows）、`cl_khr_external_semaphore_opaque_fd`（Unix）。
+- 设备匹配：Vulkan 侧可用 `VK_KHR_external_memory_capabilities`，OpenCL 侧需 `cl_khr_device_uuid` 以匹配同一物理设备。
+
+== 匹配设备
+
+需确保 Vulkan 与 OpenCL 使用同一物理设备。通过 UUID 匹配：在 Vulkan 侧获取 `VkPhysicalDeviceIDPropertiesKHR::deviceUUID`，遍历 OpenCL 平台与设备，读取 `CL_DEVICE_UUID_KHR`，找到与 Vulkan UUID 相同的设备。
+
+== Windows 安全注意
+
+在 Windows 上共享内存需设置安全属性（参见 `VkExportMemoryWin32HandleInfoKHR`），示例通过 `WinSecurityAttributes` 封装，并在所有共享内存场景中使用。
+
+== 创建与共享图像
+
+在 Vulkan 侧创建图像（`VK_IMAGE_USAGE_STORAGE_BIT | ... | VK_IMAGE_USAGE_SAMPLED_BIT`），并在 `VkExternalMemoryImageCreateInfo`（pNext）中标记外部内存，`handleTypes` 按平台选择（Windows 用 `OPAQUE_WIN32`，Unix 用 `OPAQUE_FD`）。分配内存时链入 `VkExportMemoryAllocateInfoKHR`（Windows 额外链入 `VkExportMemoryWin32HandleInfoKHR`）。随后在 OpenCL 侧通过 `clCreateImageWithProperties` 使用平台句柄导入，注意 `cl_image_desc.buffer = nullptr` 表示不在 OpenCL 分配内存，而是使用外部句柄。
+
+== 创建与共享信号量
+
+在 Vulkan 侧通过 `VkExportSemaphoreCreateInfoKHR` 创建外部信号量（Windows 需 `VkExportSemaphoreWin32HandleInfoKHR` 与安全属性），得到平台句柄后在 OpenCL 侧使用 `clCreateSemaphoreWithPropertiesKHR` 导入。示例使用两个信号量：
+- `cl_update_vk_semaphore`：OpenCL 信号，Vulkan 等待；
+- `vk_update_cl_semaphore`：Vulkan 信号，OpenCL 等待；
+
+== 在 API 间共享数据
+
+渲染循环中：
+1）Vulkan 等待前一帧 fence；
+2）首次提交不等待 OpenCL，仅信号 Vulkan→OpenCL 信号量；后续提交同时等待 OpenCL→Vulkan 信号量；
+3）OpenCL 等待 Vulkan→OpenCL 信号量，获取外部图像（`clEnqueueAcquireExternalMemObjectsKHR`），运行内核更新图像，释放图像（`clEnqueueReleaseExternalMemObjectsKHR`），信号 OpenCL→Vulkan；
+
+== 结论
+
+跨 API 互操作较为小众但并非难以理解；共享缓冲的流程与共享图像类似。

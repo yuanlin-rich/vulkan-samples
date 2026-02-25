@@ -1,0 +1,186 @@
+////
+- Copyright (c) 2021-2024, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 时间线信号量（Timeline semaphore）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/timeline_semaphore[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+在 Vulkan 1.0 中，我们引入了能够在队列间同步工作的 `VkSemaphore`。其行为特性在实践中有时较难使用。时间线信号量旨在解决这些问题，并使队列同步模型更接近 D3D12。
+
+现有信号量（即二进制信号量）在常规场景下工作良好，但在应用利用异步计算、异步传输等高级用例时，会暴露出一些难以忽视的问题。
+
+=== 二进制信号量的问题
+
+现有类型称为 `BINARY` 信号量，信号与等待必须成对 1:1 出现。在 `VkQueue` 上完成等待也会“取消信号”。这在“单生产者、多消费者”场景中并不方便。为实现该场景，需要在一次 `vkQueueSubmit` 中同时 signal 多个信号量，再为每个等待队列分配一个信号量。这不仅笨拙，而且在 signal 时往往难以预判等待方。还可能出现某些信号量最终不需要等待，而带着“已 signal 无法复用”的信号量，只能销毁。
+
+另一个问题是对象膨胀：GPU 通常存在大量在途提交，若要与每个提交同步，就需要维护相应数量的在途信号量（fence 也有类似问题）。
+
+最后是无法“先等后信号”的乱序问题。在自由线程的任务图中，有时希望先提交等待、再提交信号并由 GPU 同步来保证进度。二进制信号量必须先 signal 后 wait，虽保证前进，但限制灵活度。
+
+=== 将 `VkQueue` 视作序列——计数器思维
+
+提交到队列可视作对“单调递增计数器”的一次递增。时间线信号量据此工作：一个 `VkSemaphore` 关联 64 位计数器，新增两种操作：
+
+* 作为 signal：等待队列中此前操作完成，然后将计数器单调增加到 `old_value + increment`（通常为 1）；
+* 作为 wait：等待计数器值达到“至少等于”指定值；
+
+对应用而言，不再需要管理大量同步对象，而是围绕 64 位计数进行协作。
+
+=== 先等后信号
+
+时间线信号量允许在 signal 提交前先提交 wait。驱动负责延迟或排序，应用无需人为阻塞提交流。
+
+=== 单生产者、多消费者
+
+时间线信号量没有“取消信号”，因此可以：
+
+* 图形队列 signal 值 40
+* 异步计算队列 0 wait 值 40
+* 异步计算队列 1 wait 值 39
+* 异步计算队列 2 wait 值 36
+
+计数一旦达到 40，将始终不小于 40，后续可继续基于该值等待。
+
+=== 主机侧信号与等待，Fence 可退场
+
+有了时间线信号量，CPU 也可等待具体的计数值；无需对 `VkSemaphore` 做额外外部同步。要做 GPU↔CPU 同步，只需知道当时 signal 的计数值。
+
+== 使用时间线信号量
+
+创建 `TIMELINE` 类型的 `VkSemaphore`：
+
+[,cpp]
+----
+VkSemaphoreCreateInfo        create_info = vkb::initializers::semaphore_create_info();
+VkSemaphoreTypeCreateInfoKHR type_create_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO_KHR};
+
+type_create_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE_KHR;
+type_create_info.initialValue  = 0;
+create_info.pNext              = &type_create_info;
+
+VK_CHECK(vkCreateSemaphore(get_device().get_handle(), &create_info, nullptr, &timeline.semaphore));
+----
+
+在 `vkQueueSubmit` 中 signal：
+
+[,cpp]
+----
+VkSubmitInfo submit         = vkb::initializers::submit_info();
+submit.pSignalSemaphores    = &timeline.semaphore;
+submit.signalSemaphoreCount = 1;
+submit.pCommandBuffers      = &cmd;
+submit.commandBufferCount   = 1;
+
+VkTimelineSemaphoreSubmitInfoKHR timeline_info{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR};
+timeline_info.signalSemaphoreValueCount = 1;
+timeline_info.pSignalSemaphoreValues    = &timeline.timeline;
+
+submit.pNext = &timeline_info;
+
+VK_CHECK(vkQueueSubmit(signal_queue, 1, &submit, VK_NULL_HANDLE));
+----
+
+在 `vkQueueSubmit` 中 wait：
+
+[,cpp]
+----
+const VkPipelineStageFlags wait_stages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+
+VkSubmitInfo submit       = vkb::initializers::submit_info();
+submit.pWaitSemaphores    = &timeline.semaphore;
+submit.pWaitDstStageMask  = &wait_stages;
+submit.waitSemaphoreCount = 1;
+submit.pCommandBuffers    = &cmd;
+submit.commandBufferCount = 1;
+
+VkTimelineSemaphoreSubmitInfoKHR timeline_info{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR};
+timeline_info.waitSemaphoreValueCount = 1;
+timeline_info.pWaitSemaphoreValues    = &timeline.timeline;
+
+submit.pNext = &timeline_info;
+
+VK_CHECK(vkQueueSubmit(wait_queue, 1, &submit, VK_NULL_HANDLE));
+----
+
+在主机侧等待一个或多个信号量：
+
+[,cpp]
+----
+VkSemaphoreWaitInfoKHR wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO_KHR};
+wait_info.pSemaphores    = &semaphore;
+wait_info.semaphoreCount = 1;
+wait_info.pValues        = &value;
+VK_CHECK(vkWaitSemaphoresKHR(device->get_handle(), &wait_info, UINT64_MAX));
+----
+
+在主机侧 signal（可用于“唤醒”GPU）：
+
+[,cpp]
+----
+VkSemaphoreSignalInfoKHR signal_info{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO_KHR};
+signal_info.semaphore = semaphore;
+signal_info.value     = value;
+VK_CHECK(vkSignalSemaphoreKHR(device->get_handle(), &signal_info));
+----
+
+== 示例
+
+image::./images/sample.png[Sample]
+
+本示例以一种“非常规”的方式实现著名的“生命游戏（Game of Life）”，涵盖时间线信号量的核心功能。
+
+=== 队列
+
+示例使用两个 `VkQueue`：用于模拟的异步计算队列，以及用于拷贝到交换链并呈现结果的主图形队列。二者需相互精确同步。为展示完整 API，本示例选择“更困难”的实现方式（而非仅用二进制信号量即可完成的简单方式）。
+
+=== 异步工作线程与乱序提交
+
+我们通过专用工作线程分别在异步计算队列和图形队列上提交工作，它们与主线程不直接同步，仅通过时间线信号量协作。为避免在 Windows（特别是窗口大小变化）上运行时的问题，主线程会节流以限制时间线推进仅在渲染活跃时发生。
+
+=== 数据流
+
+分配两张 64x64 RGBA8 图像：先对一张进行初始化，然后以乒乓方式更新第 N 张、读取第 1..N-1 张；随后主线程采样第 N 张。示例中给出了顺序与乱序两种提交流。
+
+重要实践：避免 GPU 跟不上而“提交爆炸”。合适的节流点是主机侧等待时间线的地方，因为此处反正需要重录命令缓冲。
+
+=== 避免在 `vkDeviceWaitIdle` 中死锁
+
+乱序提交可能导致队列 A 需要队列 B 先提交才能前进。此时调用 `vkDeviceWaitIdle` 会因无法前进而永久阻塞，且在 `vkDeviceWaitIdle` 期间不能 `vkQueueSubmit`。应改为在主机侧等待时间线“排空”GPU，或使用 `vkQueueWaitIdle` 仅等待必要的队列。
+
+=== 关闭工作线程时避免死锁
+
+与前述类似，退出阶段可能出现等待永不到来的提交。可通过主机侧 signal 时间线“一次性解锁”。
+
+=== 单队列实现的回退
+
+为兼容仅有单队列的实现，示例展示了两项回退：
+
+* 延后提交：确保按序提交从而保证前进；
+* 锁住 `vkQueueSubmit`：同一队列被多个线程同时提交时需加锁；
+
+== API 限制
+
+当前 WSI 交换链不支持时间线信号量。获取/呈现信号量在其他 API 中也无对应。使用二进制信号量时不能“先等后信号”，这意味着在调用 `vkQueuePresentKHR` 前主机侧可能需要短暂等待，示例在 `ApiVulkanSample::submit_frame()` 之前进行此等待。
+
+== 小结
+
+时间线信号量为应用带来极大的灵活性。结合现代任务图与多线程，时间线信号量可显著简化同步，避免用二进制信号量与 fence 去模拟相同概念。使用乱序提交需谨慎，示例已列出相关陷阱与规避思路。

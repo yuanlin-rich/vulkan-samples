@@ -1,0 +1,44 @@
+////
+- Copyright (c) 2024, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+// 扩展 dynamic_state3：光栅化采样
+
+== 概述
+
+本示例演示了 `VK_EXT_extended_dynamic_state3` 与光栅化采样相关的功能之一。
+该扩展可用于在无需切换管线的情况下动态更改采样设置。
+image:./image/image.png[]
+
+== 启用扩展
+
+要在 Vulkan API 中使用该扩展：
+`VK_EXT_extended_dynamic_state3` 依赖 `VK_KHR_get_physical_device_properties2`，该扩展已在 Vulkan 1.1 中提升为核心功能。
+也就是说，使用该扩展需要启用 `VK_EXT_extended_dynamic_state3`，并且设备需支持 `VK_KHR_get_physical_device_properties2` 或 Vulkan 1.1。
+此外，本示例使用了 `VK_KHR_dynamic_rendering`，其要求 Vulkan 1.2。
+
+== 使用扩展
+
+使用步骤：
+1) 必须在 `VkPipelineDynamicStateCreateInfo` 中加入 `VK_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT`。
+2) 在激活的命令缓冲上调用方法 `void vkCmdSetRasterizationSamplesEXT(VkCommandBuffer commandBuffer, VkSampleCountFlagBits rasterizationSamples)`。
+
+== 文档链接
+
+https://registry.khronos.org/vulkan/specs/latest/man/html/VK_EXT_extended_dynamic_state3.html
+https://registry.khronos.org/vulkan/specs/latest/man/html/vkCmdSetRasterizationSamplesEXT.html

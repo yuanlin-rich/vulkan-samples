@@ -1,0 +1,28 @@
+////
+- Copyright (c) 2019-2025, The Khronos Group
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 片段着色率（Fragment shading rate）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/fragment_shading_rate[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+*扩展*：https://www.khronos.org/registry/vulkan/specs/latest/man/html/VK_KHR_fragment_shading_rate.html[`VK_KHR_fragment_shading_rate`]
+
+使用专用帧缓冲附件控制不同帧缓冲区域的片段着色率；可显式控制每个被片段覆盖的像素的片段着色器调用次数，例如用于“注视点渲染（foveated rendering）”。

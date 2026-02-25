@@ -1,0 +1,61 @@
+////
+- Copyright (c) 2021-2025, Holochip Corporation
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= GPU 渲染与多重间接绘制（GPU Rendering and Multi-Draw Indirect）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/multi_draw_indirect[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+本示例演示如何通过将“绘制命令生成与视锥裁剪”卸载到 GPU 来降低 CPU 使用率。
+
+== 绘制命令生成
+
+传统渲染大场景的方式是迭代模型并在每次绘制前绑定其资源（顶点/索引缓冲、描述符等），这些绑定在命令录制与执行阶段都有开销。Vulkan 1.2 提供的“间接绘制”允许改为：由 GPU 缓冲提供 `vkCmdDrawIndexedIndirect` 的参数，具有两大优势：
+- 绘制命令可由 GPU（如计算着色器）生成；
+- 可一次性发起多条绘制，降低命令缓冲开销；
+
+间接命令使用 `VkDrawIndexedIndirectCommand`，支持顶点/索引偏移（firstIndex/vertexOffset），可将多个模型的几何放入单一缓冲并只绑定一次；同时即使场景总顶点数超出 `2^16`，也可借助 `uint16_t` 索引缓冲（每段零基索引）实现。
+
+示例场景为 16×16 子网格；单一顶点/索引缓冲承载所有几何；绘制命令为设备本地缓冲内的 `VkDrawIndexedIndirectCommand` 数组；每条命令含顶点偏移、索引偏移与索引数。通过将 instanceCount 设为 0/1 控制子网格是否绘制（也可删除该命令）。若设备支持 `multiDrawIndirect`，用一次调用执行整个数组；否则循环逐条调用：
+
+[,cpp]
+----
+if (m_enable_mci && m_supports_mci)
+{
+    vkCmdDrawIndexedIndirect(cmd, indirect_buffer, 0, cpu_commands.size(), sizeof(cpu_commands[0]));
+}
+else
+{
+    for (size_t j = 0; j < cpu_commands.size(); ++j)
+    {
+        vkCmdDrawIndexedIndirect(cmd, indirect_buffer, j * sizeof(cpu_commands[0]), 1, sizeof(cpu_commands[0]));
+    }
+}
+----
+
+== CPU vs. GPU 生成
+
+示例提供三种生成方式：CPU、GPU、GPU+缓冲设备地址。三者几何不变，仅按视锥裁剪结果修改实例数（0/1）以启用/禁用绘制：
+- CPU：用 `VisibilityTester` 与模型/视图矩阵裁剪；每帧更新 CPU 数组并经分段缓冲上传到 GPU；
+- GPU：用计算着色器，每次调用对应一个 `VkDrawIndexedIndirectCommand`，从 SSBO（ModelInformationBuffer）读取包围球并将 instanceCount 切换 0/1；除命令缓冲初始设置外，绘制命令由 GPU 生成；
+- GPU + BDA：与 GPU 类似，但通过 `buffer_reference` 提供间接命令数组起始地址。好处是每次裁剪调用可指向不同间接数组且无需切换描述符（若相机与地址经推常量提供），可在当前帧尚未结束时低开销地生成下一帧裁剪结果。
+
+== 资源访问
+
+GPU 渲染与命令生成的优势之一是减少绑定调用。可将纹理/资源置于数组中，在着色器通过索引访问；示例将所有子网格纹理置于索引数组，通过 ModelInformationBuffer 给出纹理索引，从而无需在每次绘制前重新绑定不同纹理即可渲染全场景。

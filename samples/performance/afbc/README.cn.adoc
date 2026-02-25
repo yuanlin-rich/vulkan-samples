@@ -1,0 +1,118 @@
+////
+- Copyright (c) 2019-2024, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 在 Vulkan 应用中启用 AFBC（Enabling AFBC in your Vulkan Application）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/afbc[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+AFBC（Arm Frame Buffer Compression）是 Arm Mali GPU 中的实时无损压缩算法，旨在应对不断增长的高分辨率图形需求。该格式应用于 GPU 写入的帧缓冲，可带来最高 https://developer.arm.com/technologies/graphics-technologies/arm-frame-buffer-compression[约 50%] 的带宽降低。
+
+本示例用于展示启用/关闭 AFBC 时的带宽差异，并在屏幕顶部实时显示外部带宽图形。本例聚焦交换链图像（swapchain images）。
+
+Vulkan 允许开发者控制 `VkSwapchainKHR` 的创建与格式。我们需确保其以合适的方式创建和设定格式，以便之后从交换链查询得到的 `VkImage` 能正确应用 AFBC。
+
+注意：在设备侧启用 Vulkan 上的 AFBC 至少需要驱动 `r16p0` 且 GPU 为 `Mali G-51` 或更高。查看 GPU/驱动版本可打开 link:../../../docs/misc.adoc#Debug-Window[调试窗口] 或参考 link:../../../docs/misc.adoc#Driver-Version[文档]。
+
+== 启用 AFBC
+
+AFBC 对应用是“透明”的，会按 `VkImage` 逐个自动应用（前提是设备与图像属性满足多项检查）。驱动将结合应用状态与 `VkImage` 属性决定是否启用 AFBC。要求包括：
+
+- `VkImage` 要求：
+  - `VkSampleCountFlagBits` = `VK_SAMPLE_COUNT_1_BIT`
+  - `VkImageType` = `VK_IMAGE_TYPE_2D`
+  - `VkImageTiling` = `VK_IMAGE_TILING_OPTIMAL`
+  - `VkFormat` 需在<<format-support,支持列表>>内
+- 旗标限制：
+  - `VkImageUsageFlags` 不得包含：
+    - `VK_IMAGE_USAGE_STORAGE_BIT`
+    - `VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT`
+    - （部分设备/驱动 `r16p0`）`VK_IMAGE_USAGE_TRANSFER_DST_BIT`
+  - `VkImageCreateFlags` 不得包含：
+    - `VK_IMAGE_CREATE_ALIAS_BIT`
+    - `VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT`
+
+== 示例说明
+
+示例载入 Sponza 场景，顶部显示带宽图，底部有配置窗口。相机在场景内来回摆动，以避免因相同画面而触发 GPU 优化。
+
+配置仅一个复选框（Enable AFBC）。切换将重建交换链：
+
+- 关闭 AFBC（默认）：顶部为外部写带宽曲线（示例读取 `L2_EXT_WRITE_BEATS`）。由于交换链图像设置了 `VK_IMAGE_USAGE_STORAGE_BIT`，驱动不会为其启用 AFBC。
+- 开启 AFBC：重建交换链并移除不合规用法位，驱动为交换链图像启用 AFBC。示例观测带宽由 788.0 MiB/s 降至 528.6 MiB/s，约 33% 下降。
+
+你也可在 Streamline 中验证：
+
+image:./images/streamline_disabled.png[AFBC Off] image:./images/streamline_enabled.png[AFBC On]
+
+== 格式支持
+
+- 从 Mali-G77 起，支持任意通道排列/是否 sRGB 的每像素最高 32bit 的格式。
+- 早期支持 AFBC 的代际仅支持子集（见下表）：
+
+[cols=^]
+|===
+| Formats
+| VK_FORMAT_R4G4B4A4_UNORM_PACK16
+| VK_FORMAT_B4G4R4A4_UNORM_PACK16
+| VK_FORMAT_R5G6B5_UNORM_PACK16
+| VK_FORMAT_R5G5B5A1_UNORM_PACK16
+| VK_FORMAT_B5G5R5A1_UNORM_PACK16
+| VK_FORMAT_A1R5G5B5_UNORM_PACK16
+| VK_FORMAT_B8G8R8_UNORM
+| VK_FORMAT_B8G8R8A8_UNORM
+| VK_FORMAT_B8G8R8A8_SRGB
+| VK_FORMAT_A8B8G8R8_UNORM
+| VK_FORMAT_A8B8G8R8_SRGB
+| VK_FORMAT_A8R8G8B8_SRGB
+| VK_FORMAT_B10G10R10A2_UNORM
+| VK_FORMAT_R4G4B4A4_UNORM
+| VK_FORMAT_R5G6B5_UNORM
+| VK_FORMAT_R5G5B5A1_UNORM
+| VK_FORMAT_R8_UNORM
+| VK_FORMAT_R8G8_UNORM
+| VK_FORMAT_R8G8B8_UNORM
+| VK_FORMAT_R8G8B8A8_UNORM
+| VK_FORMAT_R8G8B8A8_SRGB
+| VK_FORMAT_A8R8G8B8_UNORM
+| VK_FORMAT_R10G10B10A2_UNORM
+| VK_FORMAT_D24_UNORM_S8_UINT
+| VK_FORMAT_D16_UNORM
+| VK_FORMAT_D32_SFLOAT
+|===
+
+== 参考
+
+- https://www.arm.com/why-arm/technologies/graphics-technologies/arm-frame-buffer-compression[Arm Frame Buffer Compression]
+
+== 最佳实践
+
+- 建议：
+  - 按 AFBC 要求正确创建交换链；
+  - AFBC 与纹理压缩（如 ASTC）相互独立，仍应尽可能压缩纹理；
+  - 避免运行时改变图像配置（例如对不满足 AFBC 的图像做 `vkCmdCopyImage` 会触发解压）；
+  - 多重采样时通过 `pResolveAttachments` 正确做解析；`SAMPLE_COUNT > 1` 的 `VkImage` 不应用 AFBC。
+- 避免：
+  - 非必要地使用 `VK_IMAGE_USAGE_STORAGE_BIT` 等用法位（仅在确需对该图像进行计算等场景使用）。
+- 影响：
+  - 图像配置不当将导致表面 `VkImage` 均为未压缩，损失可观的系统带宽。
+- 调试：
+  - 可用 Streamline 采集 AFBC 开/关的带宽对比；或用 `VK_EXT_image_compression_control` 查询是否启用（见 image_compression_control 示例）。

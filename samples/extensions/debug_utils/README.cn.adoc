@@ -1,0 +1,169 @@
+////
+- Copyright (c) 2021-2025, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= Vulkan 调试工具扩展（VK_EXT_debug_utils）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/debug_utils[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+本教程与示例代码展示如何使用 https://www.khronos.org/registry/vulkan/specs/latest/html/vkspec.html#VK_EXT_debug_utils[VK_EXT_debug_utils] 扩展来：
+- 配置验证层（Validation Layer）消息回调（Messenger）；
+- 向调试器（如 https://renderdoc.org/[RenderDoc]）传递额外调试信息。
+
+`VK_EXT_debug_utils` 基于最初的调试扩展 `VK_EXT_debug_report` 与 `VK_EXT_debug_marker` 的反馈，将两者合并为一个实例扩展并增加功能。
+
+== 启用与设置
+
+注意：扩展启用在框架中完成（参考 framework/core/instance.cpp 的 Instance 类）。在实例层级，将扩展加入“待启用扩展”列表；如常规扩展一样，需要先枚举并检查是否可用：
+
+[,cpp]
+----
+uint32_t instance_extension_count;
+VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, nullptr));
+
+std::vector<VkExtensionProperties> available_instance_extensions(instance_extension_count);
+VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, available_instance_extensions.data()));
+
+bool debug_utils = false;
+for (auto &available_extension : available_instance_extensions)
+{
+    if (strcmp(available_extension.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0)
+    {
+        debug_utils = true;
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+}
+----
+
+== 验证回调
+
+注意：验证层的基础设置也在框架中完成（见 instance.cpp）。启用扩展后可使用相关调试函数。
+
+- 创建回调：
+
+[,cpp]
+----
+VkDebugUtilsMessengerCreateInfoEXT debug_utils_create_info = {VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+
+debug_utils_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
+debug_utils_create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
+debug_utils_create_info.pfnUserCallback = debug_utils_messenger_callback;
+----
+
+- 将其挂到实例创建的 pNext，以在实例创建/销毁阶段也能收到验证信息：
+
+[,cpp]
+----
+VkInstanceCreateInfo instance_create_info = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+...
+instance_create_info.pNext = &debug_utils_create_info;
+----
+
+- 实例创建后，创建实际的 messenger：
+
+[,cpp]
+----
+result = vkCreateDebugUtilsMessengerEXT(handle, &debug_utils_create_info, nullptr, &debug_utils_messenger);
+----
+
+`messageSeverity` 指定回调传递的消息级别（Verbose/Info/Warning/Error）。通常选择 Warning 与 Error 捕获潜在问题与错误。
+
+- 回调示例：
+
+[,cpp]
+----
+VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_messenger_callback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
+    VkDebugUtilsMessageTypeFlagsEXT message_type,
+    const VkDebugUtilsMessengerCallbackDataEXT *callback_data,
+    void *user_data)
+{
+    if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+    {
+        LOGW("{} - {}: {}", callback_data->messageIdNumber, callback_data->pMessageIdName, callback_data->pMessage)
+    }
+    else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+    {
+        LOGE("{} - {}: {}", callback_data->messageIdNumber, callback_data->pMessageIdName, callback_data->pMessage);
+    }
+    return VK_FALSE;
+}
+----
+
+== 为调试工具添加信息
+
+该扩展允许向命令缓冲与队列插入带颜色的“标签（label）”，作为事件链上的标记；也允许为任意 Vulkan 对象设置“名称与标签（tag）”，便于在调试器中识别资源。
+
+- 插入标签（命令缓冲/队列）：
+  - 封闭式标签：`Begin`/`End` 包裹一段命令，支持嵌套；
+  - 即时标签：`Insert` 在当前位置插入一个标记；
+  - 对应函数：
+    - 命令缓冲：`vkCmdBeginDebugUtilsLabelEXT` / `vkCmdEndDebugUtilsLabelEXT` / `vkCmdInsertDebugUtilsLabelEXT`
+    - 队列：`vkQueueBeginDebugUtilsLabelEXT` / `vkQueueEndDebugUtilsLabelEXT` / `vkQueueInsertDebugUtilsLabelEXT`
+
+示例（为可分离的 Bloom 滤波过程加上嵌套标签，并在全屏四边形绘制前插入标记）：
+
+[,cpp]
+----
+cmd_begin_label(draw_cmd_buffers[i], "Separable bloom filter", {0.5f, 0.76f, 0.34f, 1.0f});
+    cmd_begin_label(draw_cmd_buffers[i], "Vertical bloom pass", {0.4f, 0.61f, 0.27f, 1.0f});
+        vkCmdBeginRenderPass(draw_cmd_buffers[i], ...);
+        vkCmdSetViewport(draw_cmd_buffers[i], ...);
+        vkCmdSetScissor(draw_cmd_buffers[i], ...);
+        vkCmdBindDescriptorSets(draw_cmd_buffers[i], ...);
+        vkCmdBindPipeline(draw_cmd_buffers[i], ...);
+        vkCmdDraw(draw_cmd_buffers[i], ...);
+        vkCmdEndRenderPass(draw_cmd_buffers[i]);
+    cmd_end_label(draw_cmd_buffers[i]);
+
+    cmd_begin_label(draw_cmd_buffers[i], "Horizontal bloom pass and composition", {0.4f, 0.61f, 0.27f, 1.0f});
+        vkCmdBeginRenderPass(draw_cmd_buffers[i], ...);
+        vkCmdSetViewport(draw_cmd_buffers[i], ...);
+        vkCmdSetScissor(draw_cmd_buffers[i], ...);
+        vkCmdBindDescriptorSets(draw_cmd_buffers[i], ...);
+        vkCmdBindPipeline(draw_cmd_buffers[i], ...);
+        vkCmdDraw(draw_cmd_buffers[i], ...);
+        cmd_insert_label(draw_cmd_buffers[i], "Bloom full screen quad", {1.0f, 1.0f, 1.0f, 1.0f});
+        vkCmdBindPipeline(draw_cmd_buffers[i], ...);
+        vkCmdDraw(draw_cmd_buffers[i], ...);
+        vkCmdEndRenderPass(draw_cmd_buffers[i]);
+    cmd_end_label(draw_cmd_buffers[i]);
+cmd_end_label(draw_cmd_buffers[i]);
+----
+
+在 RenderDoc 中可看到带彩色标签的事件树，更易于导航。
+
+- 对象命名与 Tag：
+  - `vkSetDebugUtilsObjectNameEXT`：为任意对象（通过句柄）设置可读名称；
+  - `vkSetDebugUtilsObjectTagEXT`：附加任意调试数据（可被调试器或回调显示）。
+
+[,cpp]
+----
+VkDebugUtilsObjectNameInfoEXT name_info = {VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
+name_info.objectType   = VK_OBJECT_TYPE_BUFFER;
+name_info.objectHandle = (uint64_t) uniform_buffers.matrices.handle;
+name_info.pObjectName  = "Some uniform buffer";
+vkSetDebugUtilsObjectNameEXT(device, &name_info);
+----
+
+== 在调试器中运行示例
+
+以 RenderDoc 为例：配置启动二进制（平台相关）、工作目录（仓库根路径）与示例名，启动运行；按 F12 捕获当前帧，随后可在事件浏览器与资源列表中看到标签与命名后的对象，便于分析与定位问题。

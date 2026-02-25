@@ -1,0 +1,107 @@
+////
+- Copyright (c) 2023-2025, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 片段着色器重心坐标（Fragment shader barycentric）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/fragment_shader_barycentric[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/fragment_shader_barycentric_screenshot.png[fragment_shader_barycentric]
+
+片段着色器重心坐标特性允许在片段着色器访问“重心坐标”（透视与线性），并通过 `pervertexEXT` 装饰访问按顶点的属性。
+
+== 概览
+
+`VK_KHR_fragment_shader_barycentric` 扩展基于 `VK_NV_fragment_shader_barycentric`。
+其提供以下内建变量与装饰：
+
+|===
+| 类型 | GLSL | SPIR-V
+
+| 内建变量
+| in vec3 gl_BaryCoordEXT;
+| BaryCoordKHR
+
+| 内建变量
+| in vec3 gl_BaryCoordNoPerspEXT;
+| BaryCoordNoPerspKHR
+
+| 装饰
+| pervertexEXT
+| perVertexKHR
+|===
+
+内建输入 `gl_BaryCoordEXT` 与 `gl_BaryCoordNoPerspEXT` 为三分量浮点向量，为当前片段提供重心坐标，其取值依据 Vulkan 规范定义：
+- 透视插值：`gl_BaryCoordEXT`
+- 线性插值：`gl_BaryCoordNoPerspEXT`
+
+使用 `pervertexEXT` 装饰声明的片段着色器输入将获得来自前一阶段同名输出的“每顶点值”。此类输入必须声明为数组（每个三角形顶点对应一个元素），例如：
+
+----
+layout(location = 0) pervertexEXT in vec4 perVertexAttr[];
+----
+
+数组元素顺序由 Vulkan 规范定义；对 `pervertexEXT` 声明的输入不进行插值。
+
+本示例通过在立方体上应用不同效果来演示该特性，效果使用 `pervertexEXT` 与 `gl_BaryCoordEXT`/`gl_BaryCoordNoPerspEXT` 实现。GUI 提供以下效果：
+- 颜色插值：利用重心坐标和顶点颜色（通过 `pervertexEXT` 由顶点着色器传入）进行颜色插值；
+- 透视 vs 非透视：展示两种坐标的差异；
+- 线框：利用重心坐标渲染线框；
+- 插值到质心：利用重心坐标将颜色插值到三角形质心；
+- Barycoord 纹理：利用重心坐标修改纹理；
+
+== 启用扩展
+
+通过 `VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR` 启用：
+
+[,C++]
+----
+VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR requested_fragment_shader_barycentric_features;
+requested_fragment_shader_barycentric_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR;
+requested_fragment_shader_barycentric_features.fragmentShaderBarycentric = VK_TRUE;
+----
+
+该结构通过 `VkPhysicalDeviceFeatures2` 的 pNext 传入 `vkGetPhysicalDeviceFeatures2`。
+示例中在 `FragmentShaderBarycentric::request_gpu_features` 中使用框架提供的模板函数 `vkb::PhysicalDevice::request_extension_features` 完成该步骤。
+
+== 着色器
+
+- 顶点着色器：声明变量 `outColor`，在片段着色器中以 `pervertexEXT` 使用：
+
+[,GLSL]
+----
+layout (location = 0) out vec3 outColor;
+----
+
+- 片段着色器：声明所需扩展并以 `pervertexEXT` 声明数组输入，示例（片段为三角形三顶点的颜色）：
+
+[,GLSL]
+----
+#extension GL_EXT_fragment_shader_barycentric : require
+layout (location = 0) in pervertexEXT vec3 inColor[];
+----
+
+根据 GUI 选择，`outColor` 的计算方式不同。示例：透视重心坐标的颜色插值：
+
+[,GLSL]
+----
+outColor.rgb = inColor[0].rgb * gl_BaryCoordEXT.x +
+               inColor[1].rgb * gl_BaryCoordEXT.y +
+               inColor[2].rgb * gl_BaryCoordEXT.z;
+----

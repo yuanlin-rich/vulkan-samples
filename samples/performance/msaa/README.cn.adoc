@@ -1,0 +1,56 @@
+////
+- Copyright (c) 2021-2024, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= MSAA（多重采样抗锯齿）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/msaa[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+锯齿源于对信号的欠采样；在图形中表现为像素颜色计算分辨率不足导致的边缘锯齿。MSAA 是降低像素采样误差的高效技术。下图左为无抗锯齿，右为 4X MSAA。
+
+MSAA 的要点：在无抗锯齿时，片段着色器以像素中心坐标决定覆盖关系并着色；在 4X MSAA 时，每像素测试 4 个采样位并存储每个采样的颜色。片段着色器仍只执行一次（用中心坐标），其输出写入覆盖的采样（通过深度测试），最终像素值为各采样的平均（resolve 步）。边缘处得到不同色度，从而降低锯齿。Vulkan 规范定义采样坐标；旋转网格等不规则模式在横纵向边缘效果更好。MSAA 对图元内部像素无影响（所有采样同色）。
+
+MSAA 不同于更昂贵的 SSAA（每采样执行片段着色器）；图元内部 alias 通常通过 mipmap 缓解。启用 MSAA：查询 `vkPhysicalDeviceLimits` 选择支持的采样数（如 `VK_SAMPLE_COUNT_4_BIT`），用于创建多采样附件与设置管线的 `rasterizationSamples`；不启用 sample shading（否则变为 SSAA）。
+
+== 颜色 resolve
+
+在平铺架构中，4x MSAA 可在平铺内完成 resolve，附件可为 transient：避免将多采样附件写回主存；设置 `storeOp = DONT_CARE`、`usage |= TRANSIENT_ATTACHMENT_BIT` 并以 `LAZILY_ALLOCATED` 分配。写回时通过子通道 `pResolveAttachments` 指向单采样附件（如交换链图像）以完成颜色 resolve。此路径下，平铺内 resolve 使带宽影响小（示例约 +3%），但显著降低锯齿。
+
+不推荐用 `vkCmdResolveImage` 在单独通道 resolve：它要求在场景渲染结束时写出 4 倍大的多采样附件，并随后读回进行 resolve，显著增加读写带宽与功耗。示例给出 2168×1080@60FPS 的估算：1x 附件约 562MB/s，4x 附件约 2247MB/s；单独通道 resolve 的读写合计约 +5GB/s。按移动设备外部 DDR 带宽每 GB/s ~100mW 估算，仅此开销就 ~500mW（约 20% 功耗预算）。
+
+== 深度 resolve
+
+一般情况下深度缓冲可为 transient，无需保存；若后处理需采样颜色与深度（如 SSAO），仍可在写回时 resolve 深度。需 `VK_KHR_depth_stencil_resolve`（Vulkan 1.2）并用 `VkSubpassDescription2 + VkSubpassDescriptionDepthStencilResolve` 指定单采样目标与 `depthResolveMode`（设备支持的 NONE/SAMPLE_ZERO/AVERAGE/MIN/MAX）。若不支持/未正确配置，则需额外读回多采样深度附件用于后处理，导致读写带宽显著增加（示例中最坏约 +6.3GB/s、~630mW）。
+
+== 最佳实践
+
+- 在平铺架构中，多采样数据可留在平铺内并随写回 resolve，额外带宽不触达外部内存，效率极高。
+- 完整利用 Vulkan 渲染通道的 inline resolve：
+  - 建议：
+    - 在可能时使用 4x MSAA；
+    - 多采样图像使用 `loadOp = CLEAR/DONT_CARE`、`storeOp = DONT_CARE`；
+    - 多采样图像使用 `LAZILY_ALLOCATED` 内存；
+    - 用 `pResolveAttachments` 在子通道写回时自动 resolve 颜色；
+    - 用 `VK_KHR_depth_stencil_resolve` 在子通道写回时自动 resolve 深度（仅当后续使用深度时）；
+  - 避免：
+    - 使用 `vkCmdResolveImage()`；
+    - 对多采样附件使用 `loadOp = LOAD`、`storeOp = STORE`；
+    - 未测评就使用 >4x MSAA；
+  - 影响：
+    - 未做 inline resolve 会显著增加带宽并降低性能；4x MSAA 1080p@60FPS 手动写/resolve 需 ~3.9GB/s，而 inline 仅 ~0.5GB/s。

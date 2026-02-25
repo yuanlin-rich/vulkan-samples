@@ -1,0 +1,57 @@
+////
+- Copyright (c) 2021-2024, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 多渲染通道的多线程录制（Multi-threaded recording with multiple render passes）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/multithreading_render_passes[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+理想情况下一帧的所有阶段都在单一渲染通道完成。但在某些场景下不可行。本示例展示在“单帧包含多渲染通道”时，如何借助多线程提升性能。
+
+== 使用多个渲染通道
+
+示例用两条渲染通道实现 shadow mapping：
+- 第一个通道渲染 shadowmap（仅深度，从光源视角）；
+- 第二个通道从相机视角渲染场景并使用前一通道的 shadowmap；片段着色时据深度判断是否遮蔽；
+
+两通道存在依赖（第二通道使用第一通道的输出）。由于是独立渲染通道，不能用 `VkSubpassDependency`，改用 `VkImageMemoryBarrier` 同步。
+
+== 多线程录制
+
+当存在两条或更多渲染通道时，可在不同线程分别录制。负载越相似，拆分带来的收益越大。示例中两通道渲染同一场景但视角与指令复杂度不同（shadow pass 较少绑定与资源准备），负载不完全相等，但仍值得拆分并有明显收益。
+
+两种方式：
+- 为每个通道单独创建“主命令缓冲”，各自录制后一次性提交 `vkQueueSubmit`；
+- 为每个通道使用“二级命令缓冲”，两线程分别录制，再在主命令缓冲中通过 `vkCmdExecuteCommands` 引用；
+
+总体推荐参见“命令缓冲使用与多线程录制”教程。示例对比了“单线程录制所有通道”与上述两种方式的差异。
+
+实测（Mali G72）：两线程方式帧时改善约 10ms，CPU 利用更高；进一步使用二级命令缓冲帧时更低。Android Profiler 的 Flame Chart 显示禁用多线程时主线程录制占 9.94s/10s；启用多线程后主线程约 9.92s、第二线程 shadow pass 约 5.7s；即两个线程 10s 完成约等于单线程 >15.7s 的工作，预期性能约提升 1.57 倍（Debug 构建下帧时由 531.1ms 降至 337.7ms）。
+
+== 最佳实践
+
+- 建议：
+  - 在可能时使用多线程录制命令缓冲；
+  - 尽量均衡分配各线程负载；
+- 影响：
+  - 对大场景与复杂录制逻辑有显著帧时改善；
+- 调试：
+  - 度量每帧 CPU/总体耗时，比较单线程与多线程效果。

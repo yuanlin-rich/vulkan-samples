@@ -1,0 +1,151 @@
+////
+Copyright (c) 2021-2023, Holochip
+
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+////
+= 动态渲染（Dynamic Rendering）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/dynamic_rendering[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概述
+
+本示例展示如何使用 `VK_KHR_dynamic_rendering` 扩展。该扩展无需创建渲染通道（render pass），在开发渲染管线时提供更高的灵活性。
+
+该扩展改变了渲染资源的管理方式。与其使用渲染通道（render pass）对象，不如在开始渲染之前，直接在命令中引用渲染附件（attachment）。
+
+下面对常规 Vulkan 渲染通道构建方式与动态渲染进行对比：
+
+|===
+| Vulkan 1.0 | 动态渲染
+
+| 渲染以 `vkCmdBeginRenderPass` 开始
+| 渲染以 `vkCmdBeginRenderingKHR` 开始
+
+| 渲染结构体使用 `VkRenderPassBeginInfo`
+| 渲染结构体使用 `VkRenderingInfoKHR`
+
+| 附件通过 `VkFramebuffer` 引用
+| 附件通过 `VkRenderingAttachmentInfoKHR` 引用
+
+| `VkFramebuffer` 对象在堆上分配且不透明
+| `VkRenderingAttachmentInfoKHR` 对象通常在栈上分配
+
+| 图形管线创建需要引用 `VkRenderPass`
+| 图形管线创建需要引用 `VkPipelineRenderingCreateInfoKHR`
+
+|
+|
+|===
+
+更多细节见下文。
+
+== 渲染附件（Rendering Attachments）
+
+过去，开发者需要创建渲染通道（render pass）和帧缓冲（帧缓冲（framebuffer）），并在 `VkRenderPassBeginInfo` 中引用它们。如下是非动态版本的命令缓冲构建示例代码：
+
+[,C++]
+----
+VkRenderPassBeginInfo render_pass_begin_info    = vkb::initializers::render_pass_begin_info();
+render_pass_begin_info.renderPass               = render_pass;
+render_pass_begin_info.帧缓冲（framebuffer）              = 帧缓冲（framebuffer）s[i];
+render_pass_begin_info.renderArea.extent.width  = width;
+render_pass_begin_info.renderArea.extent.height = height;
+render_pass_begin_info.clearValueCount          = 3;
+render_pass_begin_info.pClearValues             = clear_values.data();
+
+vkCmdBeginRenderPass(draw_cmd_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+
+draw_scene();
+
+vkCmdEndRenderPass(draw_cmd_buffer);
+----
+
+而在动态渲染中，渲染通道（render pass）和帧缓冲（帧缓冲（framebuffer））的结构被 `VkRenderingAttachmentInfoKHR` 与 `VkRenderingInfoKHR` 取代。前者包含关于颜色、深度和模板附件的信息，后者在开始渲染时引用这些附件。使用新的 `vkCmdBeginRenderingKHR` 命令来开始渲染，动态版本的示例代码如下：
+
+[,C++]
+----
+VkRenderingAttachmentInfoKHR color_attachment_info = vkb::initializers::rendering_attachment_info();
+color_attachment_info.imageView                    = swapchain_buffers[i].view;        // color_attachment.image_view;
+...
+
+VkRenderingAttachmentInfoKHR depth_attachment_info = vkb::initializers::rendering_attachment_info();
+depth_attachment_info.imageView                    = depth_stencil.view;
+...
+
+auto render_area               = VkRect2D{VkOffset2D{}, VkExtent2D{width, height}};
+auto render_info               = vkb::initializers::rendering_info(render_area, 1, &color_attachment_info);
+render_info.layerCount         = 1;
+render_info.pDepthAttachment   = &depth_attachment_info;
+render_info.pStencilAttachment = &depth_attachment_info;
+
+vkCmdBeginRenderingKHR(draw_cmd_buffer, &render_info);
+draw_scene();
+vkCmdEndRenderingKHR(draw_cmd_buffer);
+----
+
+== 管线（Pipelines）
+
+动态渲染改变了图形管线的创建方式。以往 `VkGraphicsPipelineCreateInfo` 需要引用一个非空的 `VkRenderPass` 指针；在动态渲染中，这些信息由 `VkPipelineRenderingCreateInfoKHR` 提供，并通过图形管线创建结构体的 `pNext` 字段引用：
+
+[,C++]
+----
+// 为动态渲染提供信息
+VkPipelineRenderingCreateInfoKHR pipeline_create{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
+pipeline_create.pNext                   = VK_NULL_HANDLE;
+pipeline_create.colorAttachmentCount    = 1;
+pipeline_create.pColorAttachmentFormats = &color_rendering_format;
+pipeline_create.depthAttachmentFormat   = depth_format;
+pipeline_create.stencilAttachmentFormat = depth_format;
+
+// 使用 pNext 指向渲染创建结构体
+VkGraphicsPipelineCreateInfo graphics_create{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+graphics_create.pNext               = &pipeline_create; // 引用新的动态结构体
+graphics_create.renderPass          = VK_NULL_HANDLE;  // 过去要求非空
+----
+
+在图形管线构建阶段，`VkPipelineRenderingCreateInfoKHR` 并不包含指向真实附件图像的指针（这些指针直到 `VkRenderingAttachmentInfoKHR` 才需要）。在这一阶段，只需要附件的数量和格式信息。
+
+== 启用扩展（Enabling the Extension）
+
+动态渲染 API 自 Vulkan 1.2.197 提供，使用时需配套头文件/SDK。
+
+另外，由于动态渲染以扩展形式提供，且不同设备支持程度可能不同，开发者必须为每个设备查询可用性。
+
+设备扩展名为 `VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME`，附加的可用特性由 `VkPhysicalDeviceDynamicRenderingFeaturesKHR` 结构体提供：
+
+[,C++]
+----
+typedef struct VkPhysicalDeviceDynamicRenderingFeaturesKHR {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           dynamicRendering;
+} VkPhysicalDeviceDynamicRenderingFeaturesKHR;
+----
+
+此外，如果预处理宏 `VK_NO_PROTOTYPES` 被启用，开发者可能需要在运行时通过 `vkGetInstanceProcAddr` 动态查询 `vkCmdBeginRenderingKHR` 与 `vkCmdEndRenderingKHR` 的函数指针：
+
+[,C++]
+----
+VkInstance instance = get_device().get_gpu().get_instance().get_handle();
+assert(!!instance);
+vkCmdBeginRenderingKHR = (PFN_vkCmdBeginRenderingKHR) vkGetInstanceProcAddr(instance, "vkCmdBeginRenderingKHR");
+vkCmdEndRenderingKHR   = (PFN_vkCmdEndRenderingKHR) vkGetInstanceProcAddr(instance, "vkCmdEndRenderingKHR");
+if (!vkCmdBeginRenderingKHR || !vkCmdEndRenderingKHR)
+{
+    throw std::runtime_error("Unable to dynamically load vkCmdBeginRenderingKHR and vkCmdEndRenderingKHR");
+}
+----

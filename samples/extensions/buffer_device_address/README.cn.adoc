@@ -1,0 +1,206 @@
+////
+- Copyright (c) 2021-2024, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 缓冲设备地址（Buffer device address）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/buffer_device_address[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概述
+
+缓冲设备地址是 Vulkan 特有且非常强大的特性（其他现代图形 API 中通常没有）。它向应用直接暴露 GPU 虚拟地址，使应用可以通过“指针”而非“描述符”自由访问缓冲数据。更独特的是，这些地址可以被写入缓冲，并在着色器内进行读写，具备执行指针运算等能力。
+
+== 创建缓冲
+
+要从 `VkBuffer` 获取设备地址，需要在创建与绑定阶段开启相应标志：
+
+- 在缓冲用途中加入 `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR`：
+
+[,cpp]
+----
+VkBufferCreateInfo create_info = vkb::initializers::buffer_create_info(
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR, mesh_size);
+----
+
+- 绑定的内存分配信息 `pNext` 链上附加 `VkMemoryAllocateFlagsInfoKHR` 并设置 `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT_KHR`（Vulkan 1.1 为核心，或通过 `VK_KHR_device_group` 提供）：
+
+[,cpp]
+----
+VkMemoryAllocateFlagsInfoKHR flags_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO_KHR};
+flags_info.flags             = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT_KHR;
+memory_allocation_info.pNext = &flags_info;
+----
+
+- 绑定后查询地址：
+
+[,cpp]
+----
+VkBufferDeviceAddressInfoKHR address_info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
+address_info.buffer = buffer.buffer;
+buffer.gpu_address  = vkGetBufferDeviceAddressKHR(device, &address_info);
+----
+
+该地址表现如同普通地址，本质上是 `uint64_t`，可自由偏移。在使用该指针时需自行保证对齐（编译器无法从“原始指针”推断布局），可将其写入其他缓冲后在着色器中使用。
+
+== Vulkan GLSL
+
+`GL_EXT_buffer_reference` 扩展允许将缓冲块声明为“伪指针类型”而非 SSBO：
+
+[,glsl]
+----
+#extension GL_EXT_buffer_reference : require
+----
+
+- 可前置声明类型（如链表场景）：
+
+[,glsl]
+----
+layout(buffer_reference) buffer Position;
+----
+
+- 声明“指向结构体”的缓冲类型，并标注对齐：
+
+[,glsl]
+----
+layout(std430, buffer_reference, buffer_reference_align = 8) writeonly buffer Position
+{
+    vec2 positions[];
+};
+----
+
+`buffer_reference_align` 指明该类型的指针至少 8 字节对齐（编译器无法知悉随机指针对齐）。还可用标量对齐。亦可在其他缓冲或“缓冲引用类型”中包含该类型形成指针数组：
+
+[,glsl]
+----
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer PositionReferences
+{
+    Position buffers[];
+};
+----
+
+可以将缓冲引用放入 push constants、SSBO 或 UBO：
+
+[,glsl]
+----
+layout(std430, set = 0, binding = 0) readonly buffer Pointers
+{
+    Positions positions[];
+};
+
+layout(std430, push_constant) uniform Registers
+{
+    PositionReferences references;
+} registers;
+----
+
+缓冲引用的大小与对齐均为 8 字节。将指针置于 push constants 可在无描述符集的情况下直接访问缓冲数据。
+
+=== 鲁棒性注意
+
+原始指针无法知悉安全访问范围。与启用鲁棒性的 SSBO 不同，需自行做范围检查或避免越界访问。
+
+== SPIR-V
+
+SPIR-V 中新增存储类 `PhysicalStorageBuffer` 表示指向存储缓冲内存的原始指针：
+
+- 使用 `PhysicalStorageBuffer64` 内存模型，仅对 `PhysicalStorageBuffer` 允许物理指针，其余仍保持 `Logical`：
+
+----
+OpCapability PhysicalStorageBufferAddresses
+OpExtension "SPV_KHR_physical_storage_buffer"
+OpMemoryModel PhysicalStorageBuffer64 GLSL450
+----
+
+- 物理存储缓冲需要在 `OpLoad`/`OpStore` 上显式对齐标签 `Aligned`：
+
+----
+%57 = OpLoad %_ptr_PhysicalStorageBuffer_Position %56 Aligned 8
+OpStore %164 %162 Aligned 8
+----
+
+使用 Vulkan GLSL 时，`Aligned` 由 `buffer_reference_align` 与 `Offset` 装饰推断。
+
+== 指针转换与运算
+
+缓冲设备地址允许自由进行指针类型转换：
+
+- 整数 ↔ 指针，及指针算术：
+
+[,glsl]
+----
+#extension GL_EXT_buffer_reference : require
+layout(buffer_reference) buffer PointerToFloat { float v; };
+
+PointerToFloat pointer = load_pointer();
+uint64_t int_pointer = uint64_t(pointer);
+int_pointer += offset;
+pointer = PointerToFloat(int_pointer);
+pointer.v = 42.0;
+----
+
+SPIR-V 层面对应 `OpBitcast`。若 GPU 不支持 64 位整数，可用 `uvec2` 表示指针并进行 32 位运算：
+
+[,glsl]
+----
+#extension GL_EXT_buffer_reference_uvec2 : require
+layout(buffer_reference) buffer PointerToFloat { float v; };
+PointerToFloat pointer = load_pointer();
+uvec2 int_pointer = uvec2(pointer);
+uint carry;
+uint lo = uaddCarry(int_pointer.x, offset, carry);
+uint hi = int_pointer.y + carry;
+pointer = PointerToFloat(uvec2(lo, hi));
+pointer.v = 42.0;
+----
+
+== 示例
+
+image::./images/sample.png[Sample]
+
+本示例演示如何用缓冲设备地址实现更灵活的顶点属性提取：
+
+- 每个网格对应一个 `VkBuffer`，其 `VkDeviceAddress` 被写入单独数组，用于串联彼此无关的缓冲；
+- 计算着色器更新网格缓冲，顶点着色器读取；
+- 在 push constants 中下发“指针到指针数组再到 VBO”的指针链，并在单次大规模 dispatch 中更新多个“VBO”；
+- 顶点着色器按 `gl_InstanceIndex` 选择 VBO，形成“meshlet 风格”的渲染：
+
+[,glsl]
+----
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer Position { vec2 positions[]; };
+layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer PositionReferences { Position buffers[]; };
+layout(push_constant) uniform Registers {
+    mat4 view_projection;
+    PositionReferences references;
+} registers;
+
+void main()
+{
+    int slice = gl_InstanceIndex;
+    restrict Position ptr_positions = registers.references.buffers[slice];
+    vec2 pos = ptr_positions.positions[gl_VertexIndex];
+}
+----
+
+== 调试说明
+
+使用缓冲设备地址时，为保证捕获与回放过程中的指针稳定，驱动需支持 `bufferDeviceAddressCaptureReplay`。如若缺失，调试工具（如 RenderDoc）可能屏蔽该特性。
+
+== 结论
+
+缓冲设备地址极大拓展了以往不易或无法实现的用例，为 GPU 驱动渲染等场景提供了更高的灵活性。

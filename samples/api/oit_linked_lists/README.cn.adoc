@@ -1,0 +1,69 @@
+////
+- Copyright (c) 2023, Google
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 每像素有序链表的顺序无关透明（Order-independent transparency with per-pixel ordered linked lists）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/oit_linked_lists[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+:pp: {plus}{plus}
+
+image::./images/sample.png[Sample]
+
+== 概览
+
+本示例实现了一种基于“每像素有序链表”的顺序无关透明（OIT）算法。它渲染 64 个随机颜色与不透明度（0.2 ~ 1.0）的球体，并产生像素级精确的结果。
+
+== 算法
+
+该 OIT 算法包含两个阶段：收集（gather）与合成（combine）。
+
+- 在收集阶段，透明几何被写入“每像素有序链表”；每个片段的颜色与深度被压入其目标像素对应的链表；
+- 链表头存储在与屏幕尺寸相同的存储图像中，片段数据（颜色与深度）存储在所有链表共享的存储缓冲中；
+- 合成阶段在屏幕空间进行：对每个像素，将链表中的片段排序，并在着色器中进行 Alpha 混合，得到最终的透明颜色与覆盖度；最终再通过固定的混合函数将透明颜色与背景缓冲进行混合；
+
+该算法即使在几何体相交时也能得到像素级精确结果。不过为了性能，默认每像素最多排序 16 个片段，超出的部分仅做尽力融合，因此可能产生轻微误差。这足以满足本示例的场景布置。一般而言需要在“性能”与“正确性”之间权衡：为了保持占用率，每像素排序片段数量（`combine.frag` 中 `SORTED_FRAGMENT_MAX_COUNT`）应较低；为获得完全正确的结果，该数值应尽可能高。可通过“每像素排序片段数”选项观察低数值下的伪影。
+
+== 选项
+
+[cols="2,4,4"]
+|===
+| 选项 | 描述 | 备注
+
+| 片段排序
+| 在合成阶段启用片段排序
+| 禁用时用于展示未排序透明几何的可视问题
+
+| 摄像机自动旋转
+| 启用摄像机自动旋转
+|
+
+| 每像素排序片段数
+| 指定每像素最大排序片段数
+| 设置为较小数值（如 4）以突出算法的主要弱点
+
+| 背景灰度
+| 指定背景颜色的灰度乘子（0.0 ~ 1.0）
+|
+|===
+
+== 测试
+
+该示例在 Windows 上进行了测试，启用了验证层并修复了所有报告问题；开发期间也在 Linux 上进行过测试。两套系统均使用 AMD GPU。

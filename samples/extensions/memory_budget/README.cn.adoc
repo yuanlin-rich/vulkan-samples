@@ -1,0 +1,97 @@
+////
+- Copyright (c) 2023, Holochip Corporation
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 内存预算扩展（Memory Budget extended features）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/memory_budget[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+本示例演示 Vulkan 内存预算扩展的使用。该扩展可从“物理设备”的各个内存堆采样预算与使用量，并可获取每个堆的属性标志，适合作为运行时可视化内存消耗的调试工具。
+
+== 内存预算扩展
+
+在 `MemoryBudget` 构造函数中启用所需的实例与设备扩展：
+
+[,cpp]
+----
+add_instance_extension(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+add_device_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+----
+
+在类头文件中定义并初始化与内存属性相关的结构体：
+
+[,cpp]
+----
+VkPhysicalDeviceMemoryBudgetPropertiesEXT physical_device_memory_budget_properties{};
+VkPhysicalDeviceMemoryProperties2        device_memory_properties{};
+----
+
+在 `initialize_device_memory_properties()` 中设置 sType 与 pNext：
+
+[,cpp]
+----
+physical_device_memory_budget_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+physical_device_memory_budget_properties.pNext = nullptr;
+
+device_memory_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+device_memory_properties.pNext = &physical_device_memory_budget_properties;
+----
+
+== UI 覆盖层：内存属性
+
+image::./images/memory_budget_ui_overlay.png[Sample]
+
+在应用的 UI 覆盖层中显示总内存使用量与总预算；展开“Memory Heap Details”可逐堆查看使用/预算（自动换算单位）。示例代码：
+
+[,cpp]
+----
+converted_memory = update_converted_memory(device_memory_total_usage);
+drawer.text("Total Memory Usage: %.2f %s", converted_memory.data, converted_memory.units.c_str());
+converted_memory = update_converted_memory(device_memory_total_budget);
+drawer.text("Total Memory Budget: %.2f %s", converted_memory.data, converted_memory.units.c_str());
+
+if (drawer.header("Memory Heap Details"))
+{
+    for (int i = 0; i < static_cast<int>(device_memory_heap_count); i++)
+    {
+        converted_memory = update_converted_memory(physical_device_memory_budget_properties.heapUsage[i]);
+        drawer.text("Usage: %.2f %s", converted_memory.data, converted_memory.units.c_str());
+        converted_memory = update_converted_memory(physical_device_memory_budget_properties.heapBudget[i]);
+        drawer.text("Budget: %.2f %s", converted_memory.data, converted_memory.units.c_str());
+        drawer.text("Heap Flag: %s", read_memoryHeap_flags(device_memory_properties.memoryProperties.memoryHeaps[i].flags).c_str());
+    }
+}
+----
+
+上述数据由 `update_device_memory_properties()` 更新，调用 `vkGetPhysicalDeviceMemoryProperties2()` 并汇总堆级使用与预算：
+
+[,cpp]
+----
+vkGetPhysicalDeviceMemoryProperties2(get_device().get_gpu().get_handle(), &device_memory_properties);
+device_memory_heap_count   = device_memory_properties.memoryProperties.memoryHeapCount;
+device_memory_total_usage  = 0;
+device_memory_total_budget = 0;
+for (uint32_t i = 0; i < device_memory_heap_count; i++)
+{
+    device_memory_total_usage  += physical_device_memory_budget_properties.heapUsage[i];
+    device_memory_total_budget += physical_device_memory_budget_properties.heapBudget[i];
+}
+----
+
+通常在 `prepare_instance_data()` 完成设备与资源准备后调用一次 `update_device_memory_properties()` 即可。

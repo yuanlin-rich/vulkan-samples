@@ -1,0 +1,117 @@
+////
+- Copyright (c) 2024, Mobica Limited
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 动态深度裁剪与图元裁剪
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/dynamic_primitive_clipping[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./screenshot.png[]
+
+== 概述
+
+本示例演示如何使用 `vkCmdSetDepthClipEnableEXT()` 命令应用“深度裁剪”，该命令属于 `VK_EXT_extended_dynamic_state3` 扩展的一部分。
+
+此外，还展示了如何使用内建着色器变量 `gl_ClipDistance[]` 来实现“图元裁剪”。
+
+需要注意的是，“图元裁剪”和“深度裁剪”是固定功能顶点后处理阶段的两个独立特性。它们都在同一章节（Vulkan 规范第 27.4 章，"Primitive clipping"）中描述。
+
+== 什么是图元裁剪
+
+由顶点/几何/细分着色器产生的图元会被送入固定功能的顶点后处理阶段。图元裁剪是后处理流水线中的一部分，在该阶段，点/线/三角形等图元会先与“剔除体积（cull volume）”进行剔除，然后再与“裁剪体积（clip volume）”进行裁剪。之后，它们还可能根据 `gl_ClipDistance[]` 数组中存储的结果进一步被裁剪——该数组的值必须在顶点/几何/细分着色器中计算并写入。
+
+过去，OpenGL 的固定功能版本提供了为最多 6 个裁剪平面（半空间）指定参数的方法，从而进行额外的图元裁剪。固定功能硬件会计算顶点到这些平面的距离并做出是否裁剪该图元的决定（可参考历史资料中的 `glClipPlane()` 说明）。
+
+Vulkan 延续了图元裁剪的理念，但有一个重要区别：用户需要在顶点着色器中自行计算到裁剪平面的距离。并且——因为用户在着色器中进行计算——不一定非要使用“平面”这种形式。只要将结果写入 `gl_ClipDistance[]` 数组，计算可以采用任意方式。
+
+当某个顶点在 `gl_ClipDistance[]` 中的值小于 0.0 时，该顶点将被裁剪。对于三角形图元，如果其所有顶点对应的 `gl_ClipDistance[]` 值都小于 0.0，则整个三角形会被裁剪；若部分顶点的值大于 0.0，三角形会按照 Vulkan 规范的描述被拆分成新的三角形。
+
+== 什么是深度裁剪
+
+当深度裁剪被禁用时，实际上就没有“近裁剪面”或“远裁剪面”的裁剪：
+
+- 位于远裁剪面之后（更远处）的图元的深度值会被钳制为远裁剪面的深度值（通常为 1.0）。
+
+- 位于近裁剪面之前（更靠近观察者）的图元的深度值会被钳制为近裁剪面的深度值（默认是 0.0；如果使用 `VkPipelineViewportDepthClipControlCreateInfoEXT` 中的设置，可设为 -1.0。该结构使用需要 `VK_EXT_depth_clip_control` 扩展，本教程不涉及）。
+
+在本示例中，是否启用深度裁剪的效果起初并不明显。尝试将观察者位置移近物体，并查看“use depth clipping（使用深度裁剪）”复选框如何改变物体的外观。
+
+== 如何在 Vulkan 中应用图元裁剪
+
+在 Vulkan API 中配置图元裁剪相对简单：
+
+- 必须将 `VkPhysicalDeviceFeatures::shaderClipDistance` 设为 `VK_TRUE`，以便在着色器中使用内建变量 `gl_ClipDistance[]`。
+
+- 必须在顶点着色器的 `gl_PerVertex` 结构定义中加入 `gl_ClipDistance[]`。最简单的一种形式是每个顶点一个值，如下所示：
+
+[,glsl]
+----
+out gl_PerVertex
+{
+    vec4  gl_Position;
+    float gl_ClipDistance[1];
+};
+----
+
+`gl_ClipDistance[]` 数组的大小不能超过 `VkPhysicalDeviceLimits::maxClipDistances`。
+
+在 Vulkan API 中，没有外部命令可以“关闭图元裁剪”。如果你需要类似的开关功能，必须在顶点着色器中自行实现（例如增加一个额外的控制变量；参见 shaders/dynamic_primitive_clipping/primitive_clipping.vert 了解一种实现方式）。
+
+== 如何在 Vulkan 中应用深度裁剪
+
+在 Vulkan API 中应用深度裁剪有多种方式：
+
+- 静态方式：当 `VkPipelineRasterizationDepthClipStateCreateInfoEXT` 不存在，并且 `VkPipelineRasterizationStateCreateInfo::depthClampEnable` 为 `VK_FALSE` 时（启用深度裁剪的等效情况）。
+
+- 静态方式：在 `VkGraphicsPipelineCreateInfo::pNext` 链中存在 `VkPipelineRasterizationDepthClipStateCreateInfoEXT`，且其中的 `depthClipEnable` 设为 `VK_TRUE`（需要 `VK_EXT_depth_clip_enable` 扩展）。
+
+- 使用着色器对象，并在 `vkCmdDraw*(cmd, ... )` 之前调用 `vkCmdSetDepthClipEnableEXT()`（需要扩展：`VK_EXT_shader_object`、`VK_EXT_depth_clip_enable`）。
+
+- 动态方式：在创建图形管线时，将 `VK_DYNAMIC_STATE_DEPTH_CLAMP_ENABLE_EXT` 放入 `VkPipelineDynamicStateCreateInfo::pDynamicStates`，并在 `vkCmdDraw*(cmd, ... )` 之前调用 `vkCmdSetDepthClipEnableEXT()`（需要扩展：`VK_EXT_extended_dynamic_state3`、`VK_EXT_depth_clip_enable`）。
+
+本示例重点关注最后一种“动态方式”。
+
+为了使用“动态深度裁剪”，需要：
+
+- 创建带有 `VK_KHR_get_physical_device_properties2` 扩展的 `VkInstance`
+
+- 创建带有 `VK_EXT_extended_dynamic_state3` 和 `VK_EXT_depth_clip_enable` 扩展的 `VkDevice`
+
+- 将 `VkPhysicalDeviceDepthClipEnableFeaturesEXT::depthClipEnable` 设为 `VK_TRUE`
+
+- 将 `VkPhysicalDeviceExtendedDynamicState3FeaturesEXT::extendedDynamicState3DepthClipEnable` 设为 `VK_TRUE`，以便使用 `vkCmdSetDepthClipEnableEXT()` 命令
+
+- 在创建图形管线时，`VkPipelineDynamicStateCreateInfo::pDynamicStates` 必须包含 `VK_DYNAMIC_STATE_DEPTH_CLAMP_ENABLE_EXT`
+
+- 在发出绘制命令之前调用 `vkCmdSetDepthClipEnableEXT()`
+
+== 潜在应用
+
+图元裁剪在过去常被用于各种 CAD 应用中，用来对不同 3D 对象进行剖切。如今仍可类似使用，同时还可以有其他应用场景：
+
+- 隐藏 3D 模型的某些部分
+
+- 在地形中打洞（例如用于隧道）
+
+- 用于特效处理
+
+与在片段着色器中使用 `discard` 关键字相比，图元裁剪的优势很明显：它更早发生在管线中，可能带来更好的性能（也可能不明显，需要实际测量）。但要注意顶点密度问题：该技术是基于顶点的，当顶点过于稀疏时可能出现不理想的结果。可在示例中查看对象类型 "Torusknot" 搭配可视化模式 "Clip space Y"，了解问题可能出现的地方。
+
+深度裁剪（或更常见的“取消深度裁剪”）被广泛用于各种阴影映射算法中，此类算法通常只向深度缓冲渲染。在其他涉及向颜色缓冲渲染的使用场景中，需要意识到：当大量图元被钳制到近/远裁剪面时，屏幕上看到的可能是先被绘制的图元，而非距离观察者更近的图元。该现象可在上方截图中犹他茶壶（Utah teapot）的左侧部分观察到。

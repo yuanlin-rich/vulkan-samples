@@ -1,0 +1,74 @@
+////
+- Copyright (c) 2023-2025, The Khronos Group
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+:doctype: book
+:pp: {plus}{plus}
+
+= 使用 Vulkan-Hpp 的时间戳查询（Timestamp queries with Vulkan-Hpp）
+
+ifdef::site-gen-antora[]
+TIP: 本示例的源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/hpp_timestamp_queries[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+说明：这是 API 示例 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/timestamp_queries[Timestamp queries] 的 HPP 版本，展示如何使用由 vulkan.hpp 提供的 Vulkan C{pp} 绑定。
+
+本教程与示例代码展示如何使用“时间戳查询”在 GPU 上测量时序。示例基于 HDR 样例，实现多个渲染通道，并在命令缓冲中的关键点写入 GPU 时间戳，随后由主机读取结果用于近似分析与性能改进。
+
+== 简介
+
+Vulkan 提供了多种 https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#queries[查询类型]，其中之一是 https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#queries-timestamps[时间戳查询]。它为应用提供在 GPU 上对命令执行计时的机制。与其他类型相同，需通过查询池存储与读取结果。
+
+== 注意事项
+
+GPU 的时间戳查询与 CPU（例如高精度计时器）的计时方式差异很大，原因在于 GPU 在不同流水线阶段的调度、重叠与完成方式。因此虽然技术上可选择任意流水线阶段写入时间戳，但很多阶段组合/顺序并不会得到有意义的结果，且不同队列上的时间戳也不可比较。实践中常采用“管线顶/底部”作为写入阶段以获得较稳定的近似结果。
+
+== 支持性检查
+
+并非所有 GPU 都支持时间戳查询。应检查物理设备 `timestampPeriod` 是否大于 0；若支持度不覆盖图形/计算全部管线，则需进一步检查目标队列族的 `timestampValidBits`。
+
+== 创建查询池
+
+为时间戳查询创建查询池（`vk::QueryType::eTimestamp`），并指定最大查询数。例如本示例使用 6 个时间点，分别对应三个渲染通道的起止。
+
+== 重置查询池
+
+在 Vulkan 1.0/1.1 下需启用 `VK_EXT_host_query_reset` 扩展；Vulkan 1.2 起并入核心。同时需启用 `hostQueryReset` 物理设备特性。随后可在命令缓冲开始处调用 `vk::CommandBuffer::resetQueryPool` 重置查询池。
+
+== 写入时间戳
+
+与 CPU 直接读取不同，GPU 时间戳需在命令缓冲内通过 `vk::CommandBuffer::writeTimestamp` 指定写入时机与流水线阶段。阶段选择需考虑 GPU 的并行与重叠实现，不同实现可能在某些阶段无法闩锁计时器。该调用还对之前提交的命令建立了类似屏障的执行依赖。常见方式是在 `TopOfPipe` 与 `BottomOfPipe` 写入起止时间戳。
+
+== 读取结果
+
+两种方式：
+- 在命令缓冲中使用 `vk::CommandBuffer::copyQueryPoolResults` 拷贝到缓冲；
+- 在命令缓冲执行完成后调用 `vk::Device::getQueryPoolResults` 直接获取（示例采用）。
+
+使用 `vk::QueryResultFlagBits::e64` 以 64 位读取结果，避免 32 位在纳秒计数下快速溢出；`vk::QueryResultFlagBits::eWait` 可阻塞直至可用，或使用 `eWithAvailability` 轮询可用性以避免驻留。
+
+== 结果解释
+
+读回的数据是“计数 tick”，需结合物理设备的 `timestampPeriod`（单位纳秒/增量）换算为时间值，例如以毫秒显示两个时间戳的差值。
+
+== writeTimestamp2
+
+`VK_KHR_synchronization2` 扩展引入了 `vk::CommandBuffer::writeTimestamp2`，在 `writeTimestamp` 基础上支持更多流水线阶段（`vk::PipelineStageFlags2`）。
+
+== 小结
+
+尽管受限于 GPU 的工作方式，时间戳查询仍是定位 GPU 性能瓶颈的有用工具。

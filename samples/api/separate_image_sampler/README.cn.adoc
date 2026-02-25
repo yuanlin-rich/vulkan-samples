@@ -1,0 +1,150 @@
+////
+- Copyright (c) 2021-2023, Sascha Willems
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 分离采样器与图像（Separating samplers and images）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/api/separate_image_sampler[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+本教程与示例代码展示如何在 Vulkan 应用中分离采样器（sampler）与图像（image）。相较“组合图像采样器”，这允许应用在着色器中自由组合任意采样器与图像。
+
+示例代码创建一个图像与多个不同选项的采样器；运行时可选择用于该图像的采样器。由于两者分离，运行时仅需选择不同的描述符即可。
+
+== 应用侧
+
+- 图像与采样器分别创建：通过 `VkImageView` 访问图像；通过 `VkSampler` 指定采样行为；
+- 差异始于描述符层：被采样的图像使用 `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE`，采样器使用 `VK_DESCRIPTOR_TYPE_SAMPLER`，二者独立：
+
+[,cpp]
+----
+// 仅引用图像的描述信息
+VkDescriptorImageInfo image_info{};
+image_info.imageView   = texture.image->get_vk_image_view().get_handle();
+image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+// 采样图像的写描述符
+VkWriteDescriptorSet image_write_descriptor_set{};
+image_write_descriptor_set.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+image_write_descriptor_set.dstSet          = base_descriptor_set;
+image_write_descriptor_set.dstBinding      = 1;
+image_write_descriptor_set.descriptorCount = 1;
+image_write_descriptor_set.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+image_write_descriptor_set.pImageInfo      = &image_info;
+
+// 片段着色器采样图像绑定到 Binding 1
+std::vector<VkWriteDescriptorSet> write_descriptor_sets = {
+    /* 省略 UBO 绑定 */
+    image_write_descriptor_set
+};
+vkUpdateDescriptorSets(get_device().get_handle(), static_cast<uint32_t>(write_descriptor_sets.size()), write_descriptor_sets.data(), 0, nullptr);
+----
+
+随后创建两个过滤选项不同的采样器并各自写入描述符：
+
+[,cpp]
+----
+// 为每个采样器分配一个描述符集
+descriptor_set_alloc_info.pSetLayouts = &sampler_descriptor_set_layout;
+for (size_t i = 0; i < sampler_descriptor_sets.size(); i++)
+{
+    VK_CHECK(vkAllocateDescriptorSets(get_device().get_handle(), &descriptor_set_alloc_info, &sampler_descriptor_sets[i]));
+
+    // 仅引用采样器的描述信息
+    VkDescriptorImageInfo sampler_info{};
+    sampler_info.sampler = samplers[i];
+
+    VkWriteDescriptorSet sampler_write_descriptor_set{};
+    sampler_write_descriptor_set.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    sampler_write_descriptor_set.dstSet          = sampler_descriptor_sets[i];
+    sampler_write_descriptor_set.dstBinding      = 0;
+    sampler_write_descriptor_set.descriptorCount = 1;
+    sampler_write_descriptor_set.descriptorType  = VK_DESCRIPTOR_TYPE_SAMPLER;
+    sampler_write_descriptor_set.pImageInfo      = &sampler_info;
+
+    vkUpdateDescriptorSets(get_device().get_handle(), 1, &sampler_write_descriptor_set, 0, nullptr);
+}
+----
+
+绘制阶段，将“被采样图像”描述符绑定到 set 0，将当前选择的“采样器”描述符绑定到 set 1：
+
+[,cpp]
+----
+// set 0：采样图像
+vkCmdBindDescriptorSets(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &base_descriptor_set, 0, nullptr);
+// set 1：当前采样器
+vkCmdBindDescriptorSets(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 1, 1, &sampler_descriptor_sets[selected_sampler], 0, nullptr);
+...
+vkCmdDrawIndexed(draw_cmd_buffers[i], index_count, 1, 0, 0, 0);
+----
+
+== 着色器侧
+
+片段着色器接口同样分离采样器与图像为两个独立 uniform：
+
+[,glsl]
+----
+layout (set = 0, binding = 1) uniform texture2D _texture;
+layout (set = 1, binding = 0) uniform sampler _sampler;
+----
+
+要以当前 `_sampler` 对 `_texture` 采样，可在片段着色器中通过 `sampler2D` 在运行时构造采样图像：
+
+[,glsl]
+----
+void main()
+{
+    vec4 color = texture(sampler2D(_texture, _sampler), inUV);
+}
+----
+
+== 与“组合图像采样器”的对比
+
+若使用组合图像采样器：
+
+- 应用侧使用 `VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER`，在一个描述符中同时设置图像与采样器：
+
+[,cpp]
+----
+VkDescriptorImageInfo image_info;
+image_info.imageView   = texture.view;
+image_info.sampler     = texture.sampler;
+image_info.imageLayout = texture.image_layout;
+
+VkWriteDescriptorSet image_write_descriptor_set{};
+image_write_descriptor_set.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+image_write_descriptor_set.dstSet          = descriptor_set;
+image_write_descriptor_set.dstBinding      = 0;
+image_write_descriptor_set.descriptorCount = 1;
+image_write_descriptor_set.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+image_write_descriptor_set.pImageInfo      = &image_info;
+----
+
+- 着色器仅使用一个 uniform，不再在运行时构造 `sampler2D`：
+
+[,glsl]
+----
+layout (binding = 1) uniform sampler2D _combined_image;
+
+void main()
+{
+    vec4 color = texture(_combined_image, inUV);
+}
+----
+
+相较分离方案，切换采样器时要么需要为每个图像/采样器组合创建多个描述符，要么重建描述符。

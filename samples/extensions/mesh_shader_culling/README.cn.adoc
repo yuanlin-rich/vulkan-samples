@@ -1,0 +1,120 @@
+////
+- Copyright (c) 2025, Holochip Corporation
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 网格着色器剔除（Mesh Shader Culling）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/mesh_shader_culling[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+image::./images/mesh_shader_culling.png[Mesh Shader Culling]
+
+== 概览
+
+本示例演示如何集成 `VK_EXT_mesh_shader` 扩展，并在网格着色器中实现“逐图元剔除（per-primitive culling）”。
+
+== 目录
+
+1）<<enabling-mesh-shading, 启用 mesh shader 扩展>>  2）<<creating-pipeline, 创建 mesh shading 图形管线>>  3）<<mesh-shader, 使用 meshlet 生成简单网格>>  4）<<mesh-shader-culling, 为 meshlet 建立基础剔除逻辑>>
+
+== 启用 mesh shading
+
+需要的扩展（基础要求：`VK_API_VERSION_1_1`）：
+- `VK_KHR_SPIRV_1_4_EXTENSION_NAME`
+- `VK_EXT_MESH_SHADER_EXTENSION_NAME`
+- `VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME`
+
+并在 `VkPhysicalDeviceMeshShaderFeaturesEXT` 中开启：
+- `taskShader`
+- `meshShader`
+
+== 管线创建
+
+使用 mesh 管线时，顶点输入与装配状态会被忽略，因为 mesh 管线负责生成标准片段阶段所需的顶点信息。mesh 管线既可像本示例一样直接生成顶点，也可像计算着色与模型数据配合那样由应用提供。因而将 `pVertexInputState` 与 `pInputAssemblyState` 置为 NULL。
+
+== 资源链接
+
+示例使用一个 UBO 设置剔除参数：
+
+[,cpp]
+----
+struct UBO {
+    float cull_center_x   = 0.0f;
+    float cull_center_y   = 0.0f;
+    float cull_radius     = 1.75f;
+    float meshlet_density = 2.0f;
+} ubo_cull{};
+----
+
+- `cull_center_x/y`：剔除掩膜的平移；
+- `cull_radius`：剔除掩膜大小；
+- `meshlet_density`：示例中 meshlet 总数；
+
+== 任务着色器（Task Shader）
+
+任务着色器是可选但推荐的阶段，用于启动 mesh 着色器并共享“任务负载（task payload）”。GLSL 中的 `taskPayloadSharedEXT` 在任务着色器如同共享内存，在 mesh 着色器中如同只读 SSBO：
+
+[,glsl]
+----
+struct SharedData {
+    vec4  positionTransformation;
+    int   N;
+    int   meshletsNumber;
+    float subDimension;
+    float cullRadius;
+};
+
+taskPayloadSharedEXT SharedData sharedData;
+----
+
+一般建议在使用 mesh 管线时同时使用任务着色器，以充分发挥性能。极简场景（如单三角形）除外。
+
+== Mesh 着色器
+
+任务/网格着色器以工作组方式执行。每个任务工作组可启动多个网格工作组；每个网格工作组生成一组顶点与图元。推荐围绕 meshlet 组织：任务着色器处理 meshlet 组；网格工作组处理单个 meshlet。示例生成顶点/索引并为每个顶点着色：
+
+[,glsl]
+----
+// 顶点：
+// gl_MeshVerticesEXT[k*4 + i].gl_Position = ...
+// 索引：
+// gl_PrimitiveTriangleIndicesEXT[k*2 + j] = ...
+// 颜色：
+vec3 color = vec3(1.0, 0.0, 0.0) * (k + 1) / sharedData.meshletsNumber;
+----
+
+更多 meshlet 生成资料：
+- https://developer.nvidia.com/blog/using-mesh-shaders-for-professional-graphics/
+
+== 逐图元剔除
+
+示例使用简单的圆形可视区域（GUI 控制半径）进行逐图元剔除。当图元中心超出可视区域时跳过生成：
+
+[,glsl]
+----
+vec4 position = displacement + sharedData.positionTransformation;
+float squareRadius = position.x * position.x + position.y * position.y;
+if (squareRadius < sharedData.cullRadius * sharedData.cullRadius) {
+    // 生成 meshlet
+}
+----
+
+注意：更有效的做法是在“任务着色器”阶段进行剔除，避免启动不必要的 mesh 着色器。这里的逐 mesh 剔除仅作演示。
+
+更多高级剔除方案可参考：
+- https://www.youtube.com/watch?v=n3cnUHYGbpw

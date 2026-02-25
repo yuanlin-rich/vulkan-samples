@@ -1,0 +1,30 @@
+////
+- Copyright (c) 2024, Holochip Corporation
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+
+= 网格着色（Mesh shading, HPP）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/hpp_mesh_shading[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+:pp: {plus}{plus}
+
+说明：这是扩展示例 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/mesh_shading[Mesh Shading] 的 HPP 转码版本，展示如何使用 Vulkan-Hpp 提供的 Vulkan C{pp} 绑定。
+
+本示例演示如何创建最基础的 mesh shading 示例：通过网格着色器直接生成一个三角形；无需顶点着色器，仅包含网格着色器与片段着色器。

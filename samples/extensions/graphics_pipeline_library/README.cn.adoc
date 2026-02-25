@@ -1,0 +1,106 @@
+////
+- Copyright (c) 2022-2025, Sascha Willems
+- Copyright (c) 2025, LunarG, Inc.
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 图形管线库（Graphics pipeline libraries）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/extensions/graphics_pipeline_library[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+== 概览
+
+`VK_EXT_graphics_pipeline_library` 扩展允许将图形管线的不同部分拆分并分别编译。借此可将以往“单体管线创建”拆解为多个步骤，并复用跨多条管线的公共部分。相较于单体管线状态，这通常带来更快的管线创建时间，适合运行时需要频繁创建管线的应用/游戏。
+
+== 可独立编译的管线子集
+
+该扩展将单体管线状态拆分为可独立编译的 4 个子集：
+- 顶点输入接口（Vertex Input Interface）
+- 光栅化前着色阶段（Pre-Rasterization Shaders）
+- 片段着色阶段（Fragment Shader）
+- 片段输出接口（Fragment Output Interface）
+
+== 创建管线库
+
+创建某个“管线库（部分）”与常规管线类似，但仅需提供该子集所需的状态。例如“顶点输入接口”仅需提供输入装配与顶点输入状态即可：
+
+[,cpp]
+----
+VkGraphicsPipelineLibraryCreateInfoEXT library_info{};
+library_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT;
+library_info.flags = VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT;
+...
+VkGraphicsPipelineCreateInfo pipeline_library_create_info{};
+pipeline_library_create_info.flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR | VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT;
+pipeline_library_create_info.pNext = &library_info;
+...
+vkCreateGraphicsPipelines(..., &pipeline_library_create_info, ..., &pipeline_library.vertex_input_interface);
+----
+
+== Shader 模块的“无模块化”创建
+
+在该扩展下，`vkCreateShaderModule` 的传统做法可被更高效的方式替代：将 `VkShaderModuleCreateInfo` 直接通过 `pNext` 链入 `VkPipelineShaderStageCreateInfo`，避免一次无谓的复制。
+
+[,cpp]
+----
+VkShaderModuleCreateInfo shader_module_create_info{ ... };
+VkPipelineShaderStageCreateInfo shader_stage_create_info{ ... };
+shader_stage_create_info.pNext = &shader_module_create_info;
+----
+
+== 链接可执行管线
+
+在创建好各个管线库部分后，可将其链接为可执行的图形管线：
+
+[,cpp]
+----
+std::vector<VkPipeline> libraries = {
+    pipeline_library.vertex_input_interface,
+    pipeline_library.pre_rasterization_shaders,
+    fragment_shader,
+    pipeline_library.fragment_output_interface
+};
+
+VkPipelineLibraryCreateInfoKHR linking_info{ ... };
+linking_info.pLibraries = libraries.data();
+
+VkGraphicsPipelineCreateInfo executable_pipeline_create_info{};
+executable_pipeline_create_info.pNext = &linking_info;
+executable_pipeline_create_info.flags = VK_PIPELINE_CREATE_LINK_TIME_OPTIMIZATION_BIT_EXT;
+
+vkCreateGraphicsPipelines(..., &executable_pipeline_create_info, ..., &executable);
+----
+
+`VK_PIPELINE_CREATE_LINK_TIME_OPTIMIZATION_BIT_EXT` 允许实现进行额外优化，可能增加构建时间但降低运行期开销。
+
+== 示例
+
+示例在启动阶段仅创建一次“共享顶点输入接口、光栅化前着色状态与片段输出接口”，并在运行时复用这些库部分，搭配不同的片段着色器（随机光照模型）生成新管线。管线在后台线程创建，完成后更新命令缓冲以显示网格。
+
+== 独立描述符集
+
+该扩展还提供 `VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT`（本示例未用）。当 VS/FS 各自使用不同的描述符集时，可避免在分库编译与链接阶段发生集合编号冲突。使用该标志有额外约束，验证层会提供检查。
+
+== 参考资料
+
+- 减少运行时卡顿：https://www.khronos.org/blog/reducing-draw-time-hitching-with-vk-ext-graphics-pipeline-library
+- 扩展提案：https://docs.vulkan.org/features/latest/features/proposals/VK_EXT_graphics_pipeline_library.html
+
+== 小结
+
+通过拆分与复用管线状态，`VK_EXT_graphics_pipeline_library` 为优化管线创建、减少运行时卡顿提供了新的手段。

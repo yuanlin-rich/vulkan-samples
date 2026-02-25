@@ -1,0 +1,75 @@
+////
+- Copyright (c) 2022-2024, The Khronos Group
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+-
+////
+= 使用 Vulkan-Hpp 的管线管理（Pipeline Management with Vulkan-Hpp）
+
+ifdef::site-gen-antora[]
+TIP: 本示例源码位于 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/hpp_pipeline_cache[Khronos Vulkan Samples GitHub 仓库]。
+endif::[]
+
+:pp: {plus}{plus}
+
+NOTE: 这是性能示例 https://github.com/KhronosGroup/Vulkan-Samples/tree/main/samples/performance/pipeline_cache[Pipeline Cache] 的 C{pp} 绑定（vulkan.hpp）版转译示例。
+
+== 概览
+
+Vulkan 允许应用保存“管线（图形/计算）的内部表示”，以便后续重建同一管线。本示例详细展示管线创建、缓存与管理的实现与性能影响。
+
+== Vulkan 管线
+
+使用 Vulkan-Hpp 创建图形管线通常需要：
+- vk::ShaderModule（VS/FS）
+- vk::RenderPass
+- 子通道索引（subpass index）
+- vk::PipelineLayout（含推常量与描述符集布局）
+- 各种管线状态（顶点输入、输入装配、光栅化、深度模板、颜色混合）
+
+计算管线则需：
+- vk::ShaderModule（CS）
+- vk::PipelineLayout（推常量与描述符集布局）
+
+== Vulkan 管线缓存
+
+管线创建需要内部编译 vk::ShaderModule，运行时执行会显著增加帧时。可在 createGraphicsPipeline[s]/createComputePipeline[s] 时提供 `vk::PipelineCache` 以重用先前记录的内部表示。为跨运行受益，需要在退出前用 `vk::Device::getPipelineCacheData` 获取并保存缓存二进制；下次运行以此初始化 `vk::PipelineCache`，即可避免重复的着色器编译等昂贵步骤。
+
+== 资源缓存预热（Warmup）
+
+图形管线依赖渲染通道、渲染状态、网格数据与着色器。游戏逻辑驱动的渲染使“预建所有管线”更难。可在一次运行中记录创建过的管线，并在后续运行时利用这些信息预热内部资源缓存。通常以 CreateInfo 成员做哈希来管理对象状态与复用。
+
+== 示例
+
+`hpp_pipeline_cache` 允许启用/禁用管线缓存。销毁现有管线会触发“重新缓存”，期间应用会变慢。本示例仅 2 条管线，效果已可感知；真实游戏中影响更大。
+
+首次运行时，由于首次创建管线，前几帧执行时间略高；后续运行中，`vk::PipelineCache` 以前次保存的数据初始化。
+
+在 Mali G76 上的观测：
+- 启用缓存：销毁并重建管线耗时约 24.4ms，仍可 60 FPS；
+- 关闭缓存：重建耗时约 50.4ms，几乎翻倍；
+
+== 最佳实践
+
+- 建议：
+  - 尽早创建“已知管线”（利用跨运行保存的数据）；
+  - 使用管线缓存降低创建成本；
+- 避免：
+  - 在绘制时动态创建管线且不使用管线缓存（易引发卡顿）；
+- 影响：
+  - 不复用已烘焙状态将增加帧时（包含着色器编译等昂贵操作）；
+- 调试：
+  - 通过帧捕获检查是否在 createGraphics/ComputePipeline[s] 时传入了空的 `vk::PipelineCache`；
+  - 注意 RenderDoc 的重放机制会显示该字段为空属正常。
